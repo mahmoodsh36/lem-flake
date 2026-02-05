@@ -130,9 +130,14 @@
                 (setf (symbol-function 'uiop/lisp-build:check-lisp-compile-results)
                       (lambda (output-truename warnings-p failure-p
                                &optional context-format context-arguments)
-                        (declare (ignore context-format context-arguments failure-p warnings-p))
                         output-truename)))
-              (pushnew 'nix-cl-user::configure-asdf-for-runtime uiop:*image-restore-hook*)
+                ;; add around method to handle defconstant redefinition/recompilation
+                (defmethod asdf:perform :around ((o asdf:operation) (c asdf:component))
+                  (handler-bind ((sb-ext:defconstant-uneql (lambda (c)
+                                                             (declare (ignore c))
+                                                             (invoke-restart 'continue))))
+                    (call-next-method)))
+                (pushnew 'nix-cl-user::configure-asdf-for-runtime uiop:*image-restore-hook*)
 
               ;; dump image
               (setf uiop:*image-entry-point* #'${entryPoint})
