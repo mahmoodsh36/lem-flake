@@ -6,7 +6,7 @@
     nixpkgs.url = "github:nixos/nixpkgs/release-25.11";
     lem-src = {
       # url = "github:mahmoodsh36/lem/organ-mode";
-      url = "github:mahmoodsh36/lem/main";
+      url = "github:mahmoodsh36/lem";
       flake = false;
     };
     micros-src = {
