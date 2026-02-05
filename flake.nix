@@ -5,7 +5,8 @@
     flake-parts.url = "github:hercules-ci/flake-parts";
     nixpkgs.url = "github:nixos/nixpkgs/release-25.11";
     lem-src = {
-      url = "github:mahmoodsh36/lem/organ-mode";
+      # url = "github:mahmoodsh36/lem/organ-mode";
+      url = "github:mahmoodsh36/lem/main";
       flake = false;
     };
     micros-src = {
