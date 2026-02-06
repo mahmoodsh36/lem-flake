@@ -529,7 +529,7 @@
 
           lemReplEnvSetup = ''
             export LEM_LIB_PATHS="${lispLibPaths}"
-            export LEM_SOURCE_DIR="''${LEM_SOURCE_DIR:-$(pwd)/}"
+            export LEM_SOURCE_DIR="''${LEM_SOURCE_DIR:-${inputs.lem-src}/}"
             export LEM_EXTENSION_PATHS="${extensionPaths}"
             NATIVE_PATHS=$(cat "${nativeLibPaths}" | tr '\n' ':')
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath lemReplNativeLibs}:$NATIVE_PATHS"
