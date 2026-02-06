@@ -109,36 +109,13 @@
               ;; load systems
               (mapcar #'asdf:load-system (uiop:split-string (uiop:getenv "systems")))
 
-              ;; runtime hook: configure ASDF for force-recompilation support
+              ;; runtime hook: configure ASDF output for recompilation
               (defun nix-cl-user::configure-asdf-for-runtime ()
-                (asdf:clear-output-translations)
                 (asdf:initialize-output-translations
                   `(:output-translations
                     (t (,(merge-pathnames ".cache/lem-fasl/" (user-homedir-pathname)) :**/ :*.*.*))
-                    :ignore-inherited-configuration))
-                (setf (symbol-function 'uiop/lisp-build:compile-file*)
-                      (lambda (input-file &key output-file (external-format :utf-8) &allow-other-keys)
-                        (when output-file (ensure-directories-exist output-file))
-                        (let ((*read-eval* t)
-                              (sb-ext:*on-package-variance* nil))
-                          (multiple-value-bind (truename warnings-p failure-p)
-                              (compile-file input-file :output-file output-file :external-format external-format)
-                            (declare (ignore failure-p warnings-p))
-                            (values (or truename
-                                        (when (and output-file (probe-file output-file))
-                                          (truename output-file)))
-                                    nil nil)))))
-                (setf (symbol-function 'uiop/lisp-build:check-lisp-compile-results)
-                      (lambda (output-truename warnings-p failure-p
-                               &optional context-format context-arguments)
-                        output-truename)))
-                ;; add around method to handle defconstant redefinition/recompilation
-                (defmethod asdf:perform :around ((o asdf:operation) (c asdf:component))
-                  (handler-bind ((sb-ext:defconstant-uneql (lambda (c)
-                                                             (declare (ignore c))
-                                                             (invoke-restart 'continue))))
-                    (call-next-method)))
-                (pushnew 'nix-cl-user::configure-asdf-for-runtime uiop:*image-restore-hook*)
+                    :inherit-configuration)))
+              (pushnew 'nix-cl-user::configure-asdf-for-runtime uiop:*image-restore-hook*)
 
               ;; dump image
               (setf uiop:*image-entry-point* #'${entryPoint})
@@ -516,7 +493,9 @@
             (load "${asdfFaslPath}")
             (pushnew :nix-build *features*)
             (asdf:initialize-output-translations
-             '(:output-translations :enable-user-cache :inherit-configuration))
+             `(:output-translations
+               (t (,(merge-pathnames ".cache/lem-fasl/" (user-homedir-pathname)) :**/ :*.*.*))
+               :ignore-inherited-configuration))
 
             ;; monkey-patch compile-file* to allow #. and suppress errors
             (setf (symbol-function 'uiop/lisp-build:compile-file*)
@@ -565,6 +544,10 @@
             INITEOF
             exec ${pkgs.sbcl}/bin/sbcl --load "$LEM_INIT" "$@"
           '';
+
+          lem-webview-run = pkgs.writeShellScriptBin "lem-webview" ''
+            exec ${lem-repl-bin}/bin/lem-repl --eval '(asdf:load-system "lem-webview")' --eval '(lem-webview:main)' "$@"
+          '';
         in
         {
           overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview; };
@@ -572,6 +555,7 @@
           packages = {
             inherit lem-ncurses lem-sdl2 lem-webview;
             lem-repl = lem-repl-bin;
+            lem-webview-run = lem-webview-run;
             default = lem-ncurses;
           };
 
