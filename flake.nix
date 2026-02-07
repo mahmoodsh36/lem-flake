@@ -81,6 +81,23 @@
               inherit src systems lispLibs;
             };
 
+          # common monkey-patches for ASDF/SBCL build process
+          lispMonkeyPatches = ''
+            (setf (symbol-function 'uiop/lisp-build:compile-file*)
+                  (lambda (input-file &key output-file (external-format :utf-8) &allow-other-keys)
+                    (when output-file (ensure-directories-exist output-file))
+                    (let ((*read-eval* t) (sb-ext:*on-package-variance* nil))
+                      (multiple-value-bind (truename warnings-p failure-p)
+                          (compile-file input-file :output-file output-file :external-format external-format)
+                        (declare (ignore failure-p warnings-p))
+                        (values (or truename (when (and output-file (probe-file output-file)) (truename output-file))) nil nil)))))
+
+            (setf (symbol-function 'uiop/lisp-build:check-lisp-compile-results)
+                  (lambda (output-truename warnings-p failure-p &optional context-format context-arguments)
+                    (declare (ignore context-format context-arguments failure-p warnings-p))
+                    output-truename))
+          '';
+
           # helper to generate the Lisp build script used by all variants
           mkBuildScript =
             { entryPoint ? "lem:main" }:
@@ -403,44 +420,88 @@
             installPhase = frontendInstallPhase;
           });
 
-          lem-webview = lem-base.overrideLispAttrs (o: {
-            pname = "lem-webview";
-            meta.mainProgram = "lem";
-            systems = [ "lem-webview" "tree-sitter-cl" "lem-tree-sitter" ];
-            buildScript = mkBuildScript { entryPoint = "lem-webview:main"; };
-            lispLibs = o.lispLibs ++ [ cl-webview ] ++ (with lisp.pkgs; [
+          lem-webview-lib = lisp.buildASDFSystem {
+            pname = "lem-webview-lib";
+            version = "unstable";
+            src = inputs.lem-src // { name = "lem-src-patched"; };
+
+            # lem-webview and lem-tree-sitter are the key systems
+            systems = [ "lem-webview" "lem-tree-sitter" ];
+
+            # dependencies required by these systems
+            lispLibs = commonLispLibs ++ [ cl-webview ] ++ (with lisp.pkgs; [
               float-features
               command-line-arguments
+              iterate
+              trivial-types
             ]);
-            nativeLibs =
-              [ pkgs.stdenv.cc.cc.lib c-webview ]
+
+            nativeLibs = [ c-webview ]
               ++ treeSitterNativeLibs
               ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
-                pkgs.webkitgtk_4_1
-                pkgs.webkitgtk_6_0
-                pkgs.gtk3
-              ];
-            postPatch =
-              (o.postPatch or "")
-              + (
+                 pkgs.webkitgtk_4_1
+                 pkgs.webkitgtk_6_0
+                 pkgs.gtk3
+               ];
+
+            # patch steps identical to the original lem-webview build
+            postPatch = ''
+              # add :nix-build features
+              sed -i '1i(pushnew :nix-build *features*)' lem.asd
+
+              # add organ-mode path manually to ASDF registry so it can be found during build
+              sed -i '1i(pushnew (pathname "${inputs.organ-mode-src}/") asdf:*central-registry* :test #'\'''equal)' lem.asd
+
+              # configure ASDF translations and monkey-patch compile-file*
+              cat > configure-asdf.lisp <<EOF
+              (defpackage :nix-build-config (:use :cl))
+              (in-package :nix-build-config)
+
+              (asdf:initialize-output-translations
+               \`(:output-translations
+                 (#p"/nix/store/**/*.*" ,(merge-pathnames "fasl-cache/nix/store/**/*.*" (uiop:getcwd)))
+                 :inherit-configuration))
+
+              ;; monkey-patch compile-file* to allow #. and suppress errors
+              ${lispMonkeyPatches}
+              EOF
+              sed -i '1i(load "configure-asdf.lisp")' lem.asd
+            '' + (
                 if pkgs.stdenv.isLinux
                 then ''sed -i 's/fontName:"Monospace"/fontName:"DejaVu Sans Mono"/' frontends/server/frontend/dist/assets/index.js''
                 else ''sed -i 's/fontName:"Monospace"/fontName:"Menlo"/' frontends/server/frontend/dist/assets/index.js''
               );
-            postInstall =
+            LEM_EXTENSION_PATHS = toString inputs.organ-mode-src;
+          };
+
+          lem-webview-old = lem-webview-lib.overrideLispAttrs (o: {
+            pname = "lem-webview-old";
+            meta.mainProgram = "lem";
+
+            # buildScript handles the actual executable generation
+            buildScript = mkBuildScript { entryPoint = "lem-webview:main"; };
+
+            nativeBuildInputs = (o.nativeBuildInputs or []) ++ [ pkgs.makeBinaryWrapper ];
+
+            installPhase =
               ''
+                runHook preInstall
+                mkdir -p $out/bin
+                install lem $out/bin
                 wrapProgram $out/bin/lem \
-                  --prefix LD_LIBRARY_PATH : "${treeSitterLibPath}"
+                  --prefix LD_LIBRARY_PATH : "$LD_LIBRARY_PATH:${treeSitterLibPath}" \
+                  --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
               ''
               + pkgs.lib.optionalString pkgs.stdenv.isLinux ''
                 wrapProgram $out/bin/lem \
                   --set FONTCONFIG_FILE "${pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; }}" \
                   --prefix XDG_DATA_DIRS : "${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}" \
                   --prefix XDG_DATA_DIRS : "${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}"
+                runHook postInstall
               '';
           });
 
-          allLispLibs = commonLispLibs ++ ncursesLispLibs ++ [ cl-webview ] ++ (with lisp.pkgs; [
+          allLispLibs = commonLispLibs ++ ncursesLispLibs ++ [ cl-webview lem-webview-lib ] ++ (with lisp.pkgs; [
             float-features
             command-line-arguments
           ]);
@@ -497,20 +558,9 @@
                (t (,(merge-pathnames ".cache/lem-fasl/" (user-homedir-pathname)) :**/ :*.*.*))
                :ignore-inherited-configuration))
 
-            ;; monkey-patch compile-file* to allow #. and suppress errors
-            (setf (symbol-function 'uiop/lisp-build:compile-file*)
-                  (lambda (input-file &key output-file (external-format :utf-8) &allow-other-keys)
-                    (when output-file (ensure-directories-exist output-file))
-                    (let ((*read-eval* t) (sb-ext:*on-package-variance* nil))
-                      (multiple-value-bind (truename warnings-p failure-p)
-                          (compile-file input-file :output-file output-file :external-format external-format)
-                        (declare (ignore failure-p warnings-p))
-                        (values (or truename (when (and output-file (probe-file output-file)) (truename output-file))) nil nil)))))
 
-            (setf (symbol-function 'uiop/lisp-build:check-lisp-compile-results)
-                  (lambda (output-truename warnings-p failure-p &optional context-format context-arguments)
-                    (declare (ignore context-format context-arguments failure-p warnings-p))
-                    output-truename))
+            ;; monkey-patch compile-file* to allow #. and suppress errors
+            ${lispMonkeyPatches}
 
             ;; add nix-provided extensions
             (with-open-file (f (uiop:getenv "LEM_EXTENSION_PATHS") :if-does-not-exist nil)
@@ -545,17 +595,18 @@
             exec ${pkgs.sbcl}/bin/sbcl --load "$LEM_INIT" "$@"
           '';
 
-          lem-webview-run = pkgs.writeShellScriptBin "lem-webview" ''
+          lem-webview = pkgs.writeShellScriptBin "lem-webview" ''
+            export LEM_SOURCE_DIR="${lem-webview-lib}/"
             exec ${lem-repl-bin}/bin/lem-repl --eval '(asdf:load-system "lem-webview")' --eval '(lem-webview:main)' "$@"
           '';
         in
         {
-          overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview; };
+          overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old; };
 
           packages = {
-            inherit lem-ncurses lem-sdl2 lem-webview;
+            inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old cl-webview;
             lem-repl = lem-repl-bin;
-            lem-webview-run = lem-webview-run;
+            lem-webview-run = lem-webview; # Alias for backward compatibility if needed, or remove
             default = lem-ncurses;
           };
 
@@ -563,6 +614,7 @@
             lem-ncurses = { type = "app"; program = lem-ncurses; };
             lem-sdl2 = { type = "app"; program = lem-sdl2; };
             lem-webview = { type = "app"; program = lem-webview; };
+            lem-webview-old = { type = "app"; program = lem-webview-old; };
             default = { type = "app"; program = lem-ncurses; };
           };
 
