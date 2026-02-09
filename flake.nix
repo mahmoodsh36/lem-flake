@@ -199,31 +199,29 @@
             ];
           };
 
-          async-process =
-            let
-              c-lib = pkgs.stdenv.mkDerivation {
-                pname = "async-process-native";
-                version = "unstable";
-                src = inputs.async-process-src;
-                nativeBuildInputs = with pkgs; [
-                  libtool
-                  libffi.dev
-                  automake
-                  autoconf
-                  pkg-config
-                ];
-                buildPhase = "make PREFIX=$out";
-              };
-            in
-            lisp.buildASDFSystem {
-              pname = "async-process";
-              version = "unstable";
-              src = inputs.async-process-src;
-              systems = [ "async-process" ];
-              lispLibs = [ lisp.pkgs.cffi ];
-              nativeLibs = [ c-lib ];
-              nativeBuildInputs = [ pkgs.pkg-config ];
-            };
+          async-process-native = pkgs.stdenv.mkDerivation {
+            pname = "async-process-native";
+            version = "unstable";
+            src = inputs.async-process-src;
+            nativeBuildInputs = with pkgs; [
+              libtool
+              libffi.dev
+              automake
+              autoconf
+              pkg-config
+            ];
+            buildPhase = "make PREFIX=$out";
+          };
+
+          async-process = lisp.buildASDFSystem {
+            pname = "async-process";
+            version = "unstable";
+            src = inputs.async-process-src;
+            systems = [ "async-process" ];
+            lispLibs = [ lisp.pkgs.cffi ];
+            nativeLibs = [ async-process-native ];
+            nativeBuildInputs = [ pkgs.pkg-config ];
+          };
 
           treeSitterGrammars = with pkgs.tree-sitter-grammars; [
             tree-sitter-json
@@ -442,6 +440,7 @@
                  pkgs.webkitgtk_4_1
                  pkgs.webkitgtk_6_0
                  pkgs.gtk3
+                 pkgs.stdenv.cc.cc.lib  # provides libstdc++.so.6
                ];
 
             # patch steps identical to the original lem-webview build
@@ -543,10 +542,10 @@
           };
 
           lemReplNativeLibs =
-            [ pkgs.ncurses pkgs.openssl c-webview ]
+            [ pkgs.ncurses pkgs.openssl c-webview async-process-native ]
             ++ treeSitterNativeLibs
             ++ treeSitterGrammars
-            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.webkitgtk_4_1 pkgs.gtk3 ];
+            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.webkitgtk_4_1 pkgs.gtk3 pkgs.stdenv.cc.cc.lib ];
 
           asdfFaslPath = "${lem-base.asdfFasl}/asdf.${lem-base.faslExt}";
 
@@ -568,8 +567,13 @@
                 (loop for line = (read-line f nil nil) while line
                       when (probe-file line)
                       do (pushnew (pathname (concatenate 'string line "/")) asdf:*central-registry* :test #'equal))))
-            ;; add lem source directory
-            (pushnew (pathname (uiop:getenv "LEM_SOURCE_DIR")) asdf:*central-registry* :test #'equal)
+            ;; add lem source directory tree (recursive search for .asd files)
+            (let ((lem-src (uiop:getenv "LEM_SOURCE_DIR")))
+              (when (and lem-src (probe-file lem-src))
+                (asdf:initialize-source-registry
+                 `(:source-registry
+                   (:tree ,(pathname lem-src))
+                   :inherit-configuration))))
             ;; add nix lisp library paths
             (with-open-file (f (uiop:getenv "LEM_LIB_PATHS"))
               (loop for line = (read-line f nil nil) while line
@@ -596,7 +600,7 @@
           '';
 
           lem-webview = pkgs.writeShellScriptBin "lem-webview" ''
-            export LEM_SOURCE_DIR="${lem-webview-lib}/"
+            export LEM_SOURCE_DIR="${inputs.lem-src}/"
             exec ${lem-repl-bin}/bin/lem-repl --eval '(asdf:load-system "lem-webview")' --eval '(lem-webview:main)' "$@"
           '';
         in
