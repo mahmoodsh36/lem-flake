@@ -4,6 +4,10 @@
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
     nixpkgs.url = "github:nixos/nixpkgs/release-25.11";
+    cltpt = {
+      url = "github:mahmoodsh36/cltpt";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     lem-src = {
       # url = "github:mahmoodsh36/lem/organ-mode";
       url = "github:mahmoodsh36/lem";
@@ -25,10 +29,6 @@
       url = "github:lem-project/lem-mailbox";
       flake = false;
     };
-    cltpt-src = {
-      url = "github:mahmoodsh36/cltpt";
-      flake = false;
-    };
     organ-mode-src = {
       url = "github:mahmoodsh36/organ-mode";
       flake = false;
@@ -47,9 +47,7 @@
     };
   };
 
-  outputs =
-    inputs:
-    inputs.flake-parts.lib.mkFlake { inherit inputs; } {
+  outputs = inputs: inputs.flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [
         "aarch64-darwin"
         "aarch64-linux"
@@ -152,18 +150,6 @@
               bt-semaphore
               queues
               queues_dot_simple-cqueue
-            ];
-          };
-
-          cltpt = mkSimpleASDFSystem {
-            name = "cltpt";
-            src = inputs.cltpt-src;
-            lispLibs = with lisp.pkgs; [
-              ironclad
-              fiveam
-              local-time
-              clingon
-              bordeaux-threads
             ];
           };
 
@@ -287,16 +273,16 @@
                   then "-Wl,-all_load"
                   else "-Wl,--whole-archive -Wl,--allow-multiple-definition";
               in
-              ''
-                runHook preConfigure
-                cmake -G Ninja -B build -S c \
-                  -DCMAKE_BUILD_TYPE=Release \
-                  -DCMAKE_CXX_FLAGS="-fvisibility=default -DWEBVIEW_API='extern __attribute__((visibility(\"default\")))'" \
-                  -DCMAKE_C_FLAGS="-fvisibility=default -DWEBVIEW_API='extern __attribute__((visibility(\"default\")))'" \
-                  -DCMAKE_SHARED_LINKER_FLAGS="${linkerFlags}" \
-                  -DFETCHCONTENT_SOURCE_DIR_WEBVIEW=${inputs.webview-upstream-src}
-                runHook postConfigure
-              '';
+                ''
+                  runHook preConfigure
+                  cmake -G Ninja -B build -S c \
+                    -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_CXX_FLAGS="-fvisibility=default -DWEBVIEW_API='extern __attribute__((visibility(\"default\")))'" \
+                    -DCMAKE_C_FLAGS="-fvisibility=default -DWEBVIEW_API='extern __attribute__((visibility(\"default\")))'" \
+                    -DCMAKE_SHARED_LINKER_FLAGS="${linkerFlags}" \
+                    -DFETCHCONTENT_SOURCE_DIR_WEBVIEW=${inputs.webview-upstream-src}
+                  runHook postConfigure
+                '';
             buildPhase = "cmake --build build";
             installPhase = ''
               mkdir -p $out/lib
@@ -324,7 +310,7 @@
               async-process
               jsonrpc
               lem-mailbox
-              cltpt
+              inputs.cltpt.packages.${pkgs.stdenv.system}.cltpt-lib
               tree-sitter-cl
             ]
             ++ (with lisp.pkgs; [
@@ -557,7 +543,6 @@
                (t (,(merge-pathnames ".cache/lem-fasl/" (user-homedir-pathname)) :**/ :*.*.*))
                :ignore-inherited-configuration))
 
-
             ;; monkey-patch compile-file* to allow #. and suppress errors
             ${lispMonkeyPatches}
 
@@ -603,8 +588,7 @@
             export LEM_SOURCE_DIR="${inputs.lem-src}/"
             exec ${lem-repl-bin}/bin/lem-repl --eval '(asdf:load-system "lem-webview")' --eval '(lem-webview:main)' "$@"
           '';
-        in
-        {
+        in {
           overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old; };
 
           packages = {
