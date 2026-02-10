@@ -35,14 +35,16 @@
     "cltpt": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": [
+          "nixpkgs"
+        ]
       },
       "locked": {
-        "lastModified": 1770398623,
-        "narHash": "sha256-D6vfqS9OoJ8ezwVBbuYnw276YwuWO8Eu8I3g3h887mg=",
+        "lastModified": 1770680102,
+        "narHash": "sha256-/3/ARqx5f+ZmeeU2bQFjWLT8xjjcen0ylhwzojkvfYk=",
         "owner": "mahmoodsh36",
         "repo": "cltpt",
-        "rev": "8afad8953cb0201c568d3fb5148a34f045bd299e",
+        "rev": "7633ef53b558a905eb2508bf6a41247c5fc5b0d5",
         "type": "github"
       },
       "original": {
@@ -153,16 +155,16 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1763421233,
-        "narHash": "sha256-Stk9ZYRkGrnnpyJ4eqt9eQtdFWRRIvMxpNRf4sIegnw=",
-        "owner": "NixOS",
+        "lastModified": 1770700110,
+        "narHash": "sha256-+kK9XUwF9SOtM154cXK7vCFflqjnhGSDbQKj0SUK+nY=",
+        "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "89c2b2330e733d6cdb5eae7b899326930c2c0648",
+        "rev": "713e87844741fde93b81add24a56198b16c482b7",
         "type": "github"
       },
       "original": {
-        "owner": "NixOS",
-        "ref": "nixos-unstable",
+        "owner": "nixos",
+        "ref": "release-25.11",
         "repo": "nixpkgs",
         "type": "github"
       }
@@ -179,22 +181,6 @@
       "original": {
         "owner": "nix-community",
         "repo": "nixpkgs.lib",
-        "type": "github"
-      }
-    },
-    "nixpkgs_2": {
-      "locked": {
-        "lastModified": 1770502320,
-        "narHash": "sha256-o7q1AGBIhTNzFUDsmIppb22lJTrVszQEOm143CeS/ac=",
-        "owner": "nixos",
-        "repo": "nixpkgs",
-        "rev": "d27b6a595fcd6483404835a7feaf5d0c040581c0",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nixos",
-        "ref": "release-25.11",
-        "repo": "nixpkgs",
         "type": "github"
       }
     },
@@ -224,7 +210,7 @@
         "lem-mailbox-src": "lem-mailbox-src",
         "lem-src": "lem-src",
         "micros-src": "micros-src",
-        "nixpkgs": "nixpkgs_2",
+        "nixpkgs": "nixpkgs",
         "organ-mode-src": "organ-mode-src",
         "tree-sitter-cl-src": "tree-sitter-cl-src",
         "webview-upstream-src": "webview-upstream-src"
