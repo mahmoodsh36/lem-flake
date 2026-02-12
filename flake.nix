@@ -29,7 +29,7 @@
       url = "github:lem-project/lem-mailbox";
       flake = false;
     };
-    organ-mode-src = {
+    organ-mode = {
       url = "github:mahmoodsh36/organ-mode";
       flake = false;
     };
@@ -347,7 +347,7 @@
 
           ncursesLispLibs = with lisp.pkgs; [ cl-charms cl-setlocale ];
 
-          extensionPaths = pkgs.writeText "extension-paths" (toString inputs.organ-mode-src);
+          extensionPaths = pkgs.writeText "extension-paths" (toString inputs.organ-mode);
 
           lem-base = lisp.buildASDFSystem {
             pname = "lem-base";
@@ -358,7 +358,7 @@
             postPatch = ''
               sed -i '1i(pushnew :nix-build *features*)' lem.asd
             '';
-            LEM_EXTENSION_PATHS = toString inputs.organ-mode-src;
+            LEM_EXTENSION_PATHS = toString inputs.organ-mode;
             buildScript = mkBuildScript { entryPoint = "lem:main"; };
             installPhase = ''
               runHook preInstall
@@ -435,7 +435,7 @@
               sed -i '1i(pushnew :nix-build *features*)' lem.asd
 
               # add organ-mode path manually to ASDF registry so it can be found during build
-              sed -i '1i(pushnew (pathname "${inputs.organ-mode-src}/") asdf:*central-registry* :test #'\'''equal)' lem.asd
+              sed -i '1i(pushnew (pathname "${inputs.organ-mode}/") asdf:*central-registry* :test #'\'''equal)' lem.asd
 
               # configure ASDF translations and monkey-patch compile-file*
               cat > configure-asdf.lisp <<EOF
@@ -456,7 +456,7 @@
                 then ''sed -i 's/fontName:"Monospace"/fontName:"DejaVu Sans Mono"/' frontends/server/frontend/dist/assets/index.js''
                 else ''sed -i 's/fontName:"Monospace"/fontName:"Menlo"/' frontends/server/frontend/dist/assets/index.js''
               );
-            LEM_EXTENSION_PATHS = toString inputs.organ-mode-src;
+            LEM_EXTENSION_PATHS = toString inputs.organ-mode;
           };
 
           lem-webview-old = lem-webview-lib.overrideLispAttrs (o: {
@@ -594,7 +594,6 @@
           packages = {
             inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old cl-webview;
             lem-repl = lem-repl-bin;
-            lem-webview-run = lem-webview; # Alias for backward compatibility if needed, or remove
             default = lem-ncurses;
           };
 

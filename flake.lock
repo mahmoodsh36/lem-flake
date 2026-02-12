@@ -184,7 +184,7 @@
         "type": "github"
       }
     },
-    "organ-mode-src": {
+    "organ-mode": {
       "flake": false,
       "locked": {
         "lastModified": 1770921386,
@@ -211,7 +211,7 @@
         "lem-src": "lem-src",
         "micros-src": "micros-src",
         "nixpkgs": "nixpkgs",
-        "organ-mode-src": "organ-mode-src",
+        "organ-mode": "organ-mode",
         "tree-sitter-cl-src": "tree-sitter-cl-src",
         "webview-upstream-src": "webview-upstream-src"
       }
