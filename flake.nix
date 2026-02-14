@@ -8,24 +8,24 @@
       url = "github:mahmoodsh36/cltpt";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    lem-src = {
+    lem = {
       # url = "github:mahmoodsh36/lem/organ-mode";
       url = "github:mahmoodsh36/lem";
       flake = false;
     };
-    micros-src = {
+    micros = {
       url = "github:lem-project/micros";
       flake = false;
     };
-    jsonrpc-src = {
+    jsonrpc = {
       url = "github:cxxxr/jsonrpc";
       flake = false;
     };
-    async-process-src = {
+    async-process = {
       url = "github:lem-project/async-process";
       flake = false;
     };
-    lem-mailbox-src = {
+    lem-mailbox = {
       url = "github:lem-project/lem-mailbox";
       flake = false;
     };
@@ -33,15 +33,15 @@
       url = "github:mahmoodsh36/organ-mode";
       flake = false;
     };
-    tree-sitter-cl-src = {
+    tree-sitter-cl = {
       url = "github:lem-project/tree-sitter-cl";
       flake = false;
     };
-    cl-webview-src = {
+    cl-webview = {
       url = "github:lem-project/webview";
       flake = false;
     };
-    webview-upstream-src = {
+    webview-upstream = {
       url = "github:webview/webview";
       flake = false;
     };
@@ -139,12 +139,12 @@
 
           micros = mkSimpleASDFSystem {
             name = "micros";
-            src = inputs.micros-src;
+            src = inputs.micros;
           };
 
           lem-mailbox = mkSimpleASDFSystem {
             name = "lem-mailbox";
-            src = inputs.lem-mailbox-src;
+            src = inputs.lem-mailbox;
             lispLibs = with lisp.pkgs; [
               bordeaux-threads
               bt-semaphore
@@ -156,7 +156,7 @@
           jsonrpc = lisp.buildASDFSystem {
             pname = "jsonrpc";
             version = "unstable";
-            src = inputs.jsonrpc-src;
+            src = inputs.jsonrpc;
             systems = [
               "jsonrpc"
               "jsonrpc/transport/stdio"
@@ -188,7 +188,7 @@
           async-process-native = pkgs.stdenv.mkDerivation {
             pname = "async-process-native";
             version = "unstable";
-            src = inputs.async-process-src;
+            src = inputs.async-process;
             nativeBuildInputs = with pkgs; [
               libtool
               libffi.dev
@@ -202,7 +202,7 @@
           async-process = lisp.buildASDFSystem {
             pname = "async-process";
             version = "unstable";
-            src = inputs.async-process-src;
+            src = inputs.async-process;
             systems = [ "async-process" ];
             lispLibs = [ lisp.pkgs.cffi ];
             nativeLibs = [ async-process-native ];
@@ -225,7 +225,7 @@
           ts-wrapper = pkgs.stdenv.mkDerivation {
             pname = "ts-wrapper";
             version = "0.1.0";
-            src = "${inputs.tree-sitter-cl-src}/c-wrapper";
+            src = "${inputs.tree-sitter-cl}/c-wrapper";
             buildInputs = [ pkgs.tree-sitter ];
             buildPhase = ''
               $CC -shared -fPIC -o libts-wrapper.${sharedLibExt} ts-wrapper.c \
@@ -245,7 +245,7 @@
           tree-sitter-cl = lisp.buildASDFSystem {
             pname = "tree-sitter-cl";
             version = "unstable";
-            src = inputs.tree-sitter-cl-src;
+            src = inputs.tree-sitter-cl;
             systems = [ "tree-sitter-cl" ];
             lispLibs = with lisp.pkgs; [
               cffi
@@ -258,7 +258,7 @@
           c-webview = pkgs.stdenv.mkDerivation {
             pname = "c-webview";
             version = "unstable";
-            src = inputs.cl-webview-src;
+            src = inputs.cl-webview;
             nativeBuildInputs = with pkgs; [ cmake ninja pkg-config ];
             dontStrip = true;
             buildInputs =
@@ -280,7 +280,7 @@
                     -DCMAKE_CXX_FLAGS="-fvisibility=default -DWEBVIEW_API='extern __attribute__((visibility(\"default\")))'" \
                     -DCMAKE_C_FLAGS="-fvisibility=default -DWEBVIEW_API='extern __attribute__((visibility(\"default\")))'" \
                     -DCMAKE_SHARED_LINKER_FLAGS="${linkerFlags}" \
-                    -DFETCHCONTENT_SOURCE_DIR_WEBVIEW=${inputs.webview-upstream-src}
+                    -DFETCHCONTENT_SOURCE_DIR_WEBVIEW=${inputs.webview-upstream}
                   runHook postConfigure
                 '';
             buildPhase = "cmake --build build";
@@ -293,7 +293,7 @@
           cl-webview = lisp.buildASDFSystem {
             pname = "cl-webview";
             version = "unstable";
-            src = inputs.cl-webview-src // { name = "cl-webview-src"; };
+            src = inputs.cl-webview // { name = "cl-webview"; };
             systems = [ "webview" ];
             lispLibs = with lisp.pkgs; [ cffi float-features ];
             nativeLibs = [ c-webview ];
@@ -352,7 +352,7 @@
           lem-base = lisp.buildASDFSystem {
             pname = "lem-base";
             version = "unstable";
-            src = inputs.lem-src // { name = "lem-src"; };
+            src = inputs.lem // { name = "lem"; };
             nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
             lispLibs = commonLispLibs;
             postPatch = ''
@@ -407,7 +407,7 @@
           lem-webview-lib = lisp.buildASDFSystem {
             pname = "lem-webview-lib";
             version = "unstable";
-            src = inputs.lem-src // { name = "lem-src-patched"; };
+            src = inputs.lem // { name = "lem-patched"; };
 
             # lem-webview and lem-tree-sitter are the key systems
             systems = [ "lem-webview" "lem-tree-sitter" ];
@@ -568,7 +568,7 @@
 
           lemReplEnvSetup = ''
             export LEM_LIB_PATHS="${lispLibPaths}"
-            export LEM_SOURCE_DIR="''${LEM_SOURCE_DIR:-${inputs.lem-src}/}"
+            export LEM_SOURCE_DIR="''${LEM_SOURCE_DIR:-${inputs.lem}/}"
             export LEM_EXTENSION_PATHS="${extensionPaths}"
             NATIVE_PATHS=$(cat "${nativeLibPaths}" | tr '\n' ':')
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath lemReplNativeLibs}:$NATIVE_PATHS"
@@ -585,7 +585,7 @@
           '';
 
           lem-webview = pkgs.writeShellScriptBin "lem-webview" ''
-            export LEM_SOURCE_DIR="${inputs.lem-src}/"
+            export LEM_SOURCE_DIR="${inputs.lem}/"
             exec ${lem-repl-bin}/bin/lem-repl --eval '(asdf:load-system "lem-webview")' --eval '(lem-webview:main)' "$@"
           '';
         in {
