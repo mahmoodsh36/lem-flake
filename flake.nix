@@ -429,6 +429,10 @@
                  pkgs.stdenv.cc.cc.lib  # provides libstdc++.so.6
                ];
 
+            # skip fixupPhase on darwin (patchelf not needed/available)
+            fixupPhase = pkgs.lib.optionalString pkgs.stdenv.isDarwin "";
+            dontFixup = pkgs.stdenv.isDarwin;
+
             # patch steps identical to the original lem-webview build
             postPatch = ''
               # add :nix-build features
