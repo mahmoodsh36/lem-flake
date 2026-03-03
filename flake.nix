@@ -343,6 +343,7 @@
               trivial-open-browser
               frugal-uuid
               hunchentoot
+              rove
             ]);
 
           ncursesLispLibs = with lisp.pkgs; [ cl-charms cl-setlocale ];
@@ -592,12 +593,26 @@
             export LEM_SOURCE_DIR="${inputs.lem}/"
             exec ${lem-repl-bin}/bin/lem-repl --eval '(asdf:load-system "lem-webview")' --eval '(lem-webview:main)' "$@"
           '';
+
+          organ-mode-tests-runner = let
+            testScript = pkgs.writeText "run-organ-tests.lisp" ''
+              (asdf:load-system "lem")
+              (asdf:load-system "lem-fake-interface")
+              (asdf:load-system "rove")
+              (asdf:load-system "organ-mode-tests")
+              (rove:run-suite :organ-mode-tests)
+              (uiop:quit)
+            '';
+          in pkgs.writeShellScriptBin "organ-mode-tests" ''
+            exec ${lem-repl-bin}/bin/lem-repl --load "${testScript}" "$@"
+          '';
         in {
           overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old; };
 
           packages = {
             inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old cl-webview;
             lem-repl = lem-repl-bin;
+            organ-mode-tests = organ-mode-tests-runner;
             default = lem-ncurses;
           };
 
@@ -606,6 +621,7 @@
             lem-sdl2 = { type = "app"; program = lem-sdl2; };
             lem-webview = { type = "app"; program = lem-webview; };
             lem-webview-old = { type = "app"; program = lem-webview-old; };
+            organ-mode-tests = { type = "app"; program = organ-mode-tests-runner; };
             default = { type = "app"; program = lem-ncurses; };
           };
 
