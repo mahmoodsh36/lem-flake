@@ -594,17 +594,8 @@
             exec ${lem-repl-bin}/bin/lem-repl --eval '(asdf:load-system "lem-webview")' --eval '(lem-webview:main)' "$@"
           '';
 
-          organ-mode-tests-runner = let
-            testScript = pkgs.writeText "run-organ-tests.lisp" ''
-              (asdf:load-system "lem")
-              (asdf:load-system "lem-fake-interface")
-              (asdf:load-system "rove")
-              (asdf:load-system "organ-mode-tests")
-              (rove:run-suite :organ-mode-tests)
-              (uiop:quit)
-            '';
-          in pkgs.writeShellScriptBin "organ-mode-tests" ''
-            exec ${lem-repl-bin}/bin/lem-repl --load "${testScript}" "$@"
+          organ-mode-tests-runner = pkgs.writeShellScriptBin "organ-mode-tests" ''
+            exec ${lem-repl-bin}/bin/lem-repl --load "${inputs.organ-mode}/run-tests.lisp" "$@"
           '';
         in {
           overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old; };
