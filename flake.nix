@@ -124,12 +124,21 @@
               ;; load systems
               (mapcar #'asdf:load-system (uiop:split-string (uiop:getenv "systems")))
 
-              ;; runtime hook: configure ASDF output for recompilation
+              ;; runtime hook: configure ASDF for runtime
+              ;; - redirect FASL output to user cache
+              ;; - register all loaded systems as immutable so ASDF won't recompile them
+              ;;   (recompilation reloads buffer.lisp which redefines make-buffer-point
+              ;;    back to the default that returns plain POINT instead of CURSOR,
+              ;;    causing cursor-mark to fail on buffers created during recompilation)
               (defun nix-cl-user::configure-asdf-for-runtime ()
                 (asdf:initialize-output-translations
                   `(:output-translations
                     (t (,(merge-pathnames ".cache/lem-fasl/" (user-homedir-pathname)) :**/ :*.*.*))
-                    :inherit-configuration)))
+                    :inherit-configuration))
+                ;; mark all currently loaded systems as immutable so ASDF
+                ;; won't try to recompile them when init.lisp loads extensions
+                (dolist (system (asdf:already-loaded-systems))
+                  (asdf:register-immutable-system system)))
               (pushnew 'nix-cl-user::configure-asdf-for-runtime uiop:*image-restore-hook*)
 
               ;; dump image
