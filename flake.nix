@@ -500,6 +500,34 @@
               '';
           });
 
+          lem-webview-app =
+            let
+              desktopItem = pkgs.makeDesktopItem {
+                name = "lem";
+                exec = "lem-webview";
+                icon = "lem";
+                desktopName = "Lem";
+                genericName = "Text Editor";
+                categories = [ "Development" "TextEditor" ];
+              };
+            in
+            pkgs.stdenv.mkDerivation {
+              pname = "lem-webview-app";
+              version = "unstable";
+              nativeBuildInputs = pkgs.lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.desktopToDarwinBundle;
+              buildInputs = [ lem-webview ];
+              dontUnpack = true;
+              installPhase = ''
+                runHook preInstall
+                mkdir -p $out/bin
+                ln -s ${lem-webview}/bin/lem-webview $out/bin/lem-webview
+                mkdir -p $out/share/applications
+                cp -r ${desktopItem}/share/applications/* $out/share/applications/
+                runHook postInstall
+              '';
+              meta.mainProgram = "lem-webview";
+            };
+
           allLispLibs = commonLispLibs ++ ncursesLispLibs ++ [ cl-webview lem-webview-lib ] ++ (with lisp.pkgs; [
             float-features
             command-line-arguments
@@ -607,10 +635,10 @@
             exec ${lem-repl-bin}/bin/lem-repl --load "${inputs.organ-mode}/run-tests.lisp" "$@"
           '';
         in {
-          overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old; };
+          overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old lem-webview-app; };
 
           packages = {
-            inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old cl-webview;
+            inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old lem-webview-app cl-webview;
             lem-repl = lem-repl-bin;
             organ-mode-tests = organ-mode-tests-runner;
             default = lem-ncurses;
@@ -621,6 +649,7 @@
             lem-sdl2 = { type = "app"; program = lem-sdl2; };
             lem-webview = { type = "app"; program = lem-webview; };
             lem-webview-old = { type = "app"; program = lem-webview-old; };
+            lem-webview-app = { type = "app"; program = lem-webview-app; };
             organ-mode-tests = { type = "app"; program = organ-mode-tests-runner; };
             default = { type = "app"; program = lem-ncurses; };
           };
