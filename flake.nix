@@ -96,9 +96,64 @@
                     output-truename))
           '';
 
+          asdfPathHelpers = ''
+            (defun nix-cl-user::normalize-existing-directory (path)
+              (when (and path
+                         (not (string= path ""))
+                         (probe-file path))
+                (namestring
+                 (uiop:ensure-directory-pathname (truename path)))))
+
+            (defun nix-cl-user::collect-paths-from-spec (spec)
+              (let ((paths))
+                (labels ((add-path (path)
+                           (let ((normalized (nix-cl-user::normalize-existing-directory path)))
+                             (when normalized
+                               (pushnew normalized paths :test #'string=)))))
+                  (when (and spec (not (string= spec "")))
+                    (cond
+                      ((uiop:directory-exists-p spec)
+                       (add-path spec))
+                      ((probe-file spec)
+                       (with-open-file (f spec :if-does-not-exist nil)
+                         (when f
+                           (loop for line = (read-line f nil nil)
+                                 while line
+                                 do (add-path line)))))
+                      (t
+                       (dolist (path (uiop:split-string spec :separator '(#\newline #\space)))
+                         (add-path path)))))
+                  (nreverse paths))))
+
+            (defun nix-cl-user::register-central-registry-paths (paths)
+              (dolist (path paths)
+                (pushnew (pathname path) asdf:*central-registry* :test #'equal)))
+
+            (defun nix-cl-user::register-central-registry-spec (spec)
+              (nix-cl-user::register-central-registry-paths
+               (nix-cl-user::collect-paths-from-spec spec)))
+
+            (defun nix-cl-user::register-source-registry-tree (path)
+              (let ((normalized (nix-cl-user::normalize-existing-directory path)))
+                (when normalized
+                  (asdf:initialize-source-registry
+                   `(:source-registry
+                     (:tree ,(pathname normalized))
+                     :inherit-configuration)))))
+          '';
+
           # helper to generate the Lisp build script used by all variants
           mkBuildScript =
-            { entryPoint ? "lem:main" }:
+            {
+              entryPoint ? "lem:main",
+              faslTranslationPaths ? [ "/nix/store" ],
+            }:
+            let
+              faslTranslationForms = pkgs.lib.concatMapStringsSep "\n" (path: ''
+                (#p"${path}/**/*.*"
+                 ,(merge-pathnames "fasl-cache${path}/**/*.*" (uiop:getcwd)))'')
+                faslTranslationPaths;
+            in
             pkgs.writeText "build-lem.lisp" ''
               (defpackage :nix-cl-user (:use :cl))
               (in-package :nix-cl-user)
@@ -106,20 +161,18 @@
               ;; load ASDF
               (load "${lem-base.asdfFasl}/asdf.${lem-base.faslExt}")
 
-              ;; redirect nix store fasls to local fasl-cache directory
-              (asdf:initialize-output-translations
-                `(:output-translations
-                  (#p"/nix/store/**/*.*" ,(merge-pathnames "fasl-cache/nix/store/**/*.*" (uiop:getcwd)))
-                  :inherit-configuration))
+              ${asdfPathHelpers}
+
+              ${pkgs.lib.optionalString (faslTranslationPaths != []) ''
+                ;; redirect selected read-only source trees to a local fasl-cache directory
+                (asdf:initialize-output-translations
+                  `(:output-translations
+                    ${faslTranslationForms}
+                    :inherit-configuration))
+              ''}
 
               ;; add extension paths (like organ-mode) to the registry
-              (let ((ext-paths (uiop:getenv "LEM_EXTENSION_PATHS")))
-                (when (and ext-paths (not (string= ext-paths "")))
-                  (dolist (path (uiop:split-string ext-paths :separator '(#\Newline #\Space)))
-                    (when (and (not (string= path ""))
-                               (probe-file path))
-                      (pushnew (pathname (concatenate 'string path "/"))
-                               asdf:*central-registry* :test #'equal)))))
+              (nix-cl-user::register-central-registry-spec (uiop:getenv "LEM_EXTENSION_PATHS"))
 
               ;; load systems
               (mapcar #'asdf:load-system (uiop:split-string (uiop:getenv "systems")))
@@ -131,6 +184,8 @@
               ;;    back to the default that returns plain POINT instead of CURSOR,
               ;;    causing cursor-mark to fail on buffers created during recompilation)
               (defun nix-cl-user::configure-asdf-for-runtime ()
+                (nix-cl-user::register-central-registry-spec
+                 (uiop:getenv "LEM_EXTENSION_PATHS"))
                 (asdf:initialize-output-translations
                   `(:output-translations
                     (t (,(merge-pathnames ".cache/lem-fasl/" (user-homedir-pathname)) :**/ :*.*.*))
@@ -369,7 +424,10 @@
               sed -i '1i(pushnew :nix-build *features*)' lem.asd
             '';
             LEM_EXTENSION_PATHS = toString inputs.organ-mode;
-            buildScript = mkBuildScript { entryPoint = "lem:main"; };
+            buildScript = mkBuildScript {
+              entryPoint = "lem:main";
+              faslTranslationPaths = [ (toString inputs.organ-mode) ];
+            };
             installPhase = ''
               runHook preInstall
               mkdir -p $out/bin
@@ -390,6 +448,27 @@
               --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
             runHook postInstall
           '';
+
+          mkWebviewInstallPhase =
+            binaryName:
+            ''
+              runHook preInstall
+              mkdir -p $out/bin
+              install lem $out/bin/${binaryName}
+              wrapProgram $out/bin/${binaryName} \
+                --set LEM_EXTENSION_PATHS "${inputs.organ-mode}" \
+                --prefix LD_LIBRARY_PATH : "$LD_LIBRARY_PATH:${treeSitterLibPath}" \
+                --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
+            ''
+            + pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+              wrapProgram $out/bin/${binaryName} \
+                --set FONTCONFIG_FILE "${pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; }}" \
+                --prefix XDG_DATA_DIRS : "${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}" \
+                --prefix XDG_DATA_DIRS : "${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}"
+            ''
+            + ''
+              runHook postInstall
+            '';
 
           lem-ncurses = lem-base.overrideLispAttrs (o: {
             pname = "lem-ncurses";
@@ -443,7 +522,7 @@
             fixupPhase = pkgs.lib.optionalString pkgs.stdenv.isDarwin "";
             dontFixup = pkgs.stdenv.isDarwin;
 
-            # patch steps identical to the original lem-webview build
+            # patch steps for the prebuilt webview build
             postPatch = ''
               # add :nix-build features
               sed -i '1i(pushnew :nix-build *features*)' lem.asd
@@ -451,17 +530,11 @@
               # add organ-mode path manually to ASDF registry so it can be found during build
               sed -i '1i(pushnew (pathname "${inputs.organ-mode}/") asdf:*central-registry* :test #'\'''equal)' lem.asd
 
-              # configure ASDF translations and monkey-patch compile-file*
+              # monkey-patch compile-file* to allow #. and suppress errors
               cat > configure-asdf.lisp <<EOF
               (defpackage :nix-build-config (:use :cl))
               (in-package :nix-build-config)
 
-              (asdf:initialize-output-translations
-               \`(:output-translations
-                 (#p"/nix/store/**/*.*" ,(merge-pathnames "fasl-cache/nix/store/**/*.*" (uiop:getcwd)))
-                 :inherit-configuration))
-
-              ;; monkey-patch compile-file* to allow #. and suppress errors
               ${lispMonkeyPatches}
               EOF
               sed -i '1i(load "configure-asdf.lisp")' lem.asd
@@ -473,31 +546,22 @@
             LEM_EXTENSION_PATHS = toString inputs.organ-mode;
           };
 
-          lem-webview-old = lem-webview-lib.overrideLispAttrs (o: {
-            pname = "lem-webview-old";
-            meta.mainProgram = "lem";
+          lem-webview = lem-webview-lib.overrideLispAttrs (o: {
+            pname = "lem-webview";
+            meta.mainProgram = "lem-webview";
+            LEM_EXTENSION_PATHS = toString inputs.organ-mode;
 
-            # buildScript handles the actual executable generation
-            buildScript = mkBuildScript { entryPoint = "lem-webview:main"; };
+            # build a dumped executable while reusing prebuilt store FASLs for packaged
+            # dependencies. only organ-mode's source tree gets a local writable FASL cache
+            # because lem/extensions depends on it directly.
+            buildScript = mkBuildScript {
+              entryPoint = "lem-webview:main";
+              faslTranslationPaths = [ (toString inputs.organ-mode) ];
+            };
 
             nativeBuildInputs = (o.nativeBuildInputs or []) ++ [ pkgs.makeBinaryWrapper ];
 
-            installPhase =
-              ''
-                runHook preInstall
-                mkdir -p $out/bin
-                install lem $out/bin
-                wrapProgram $out/bin/lem \
-                  --prefix LD_LIBRARY_PATH : "$LD_LIBRARY_PATH:${treeSitterLibPath}" \
-                  --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
-              ''
-              + pkgs.lib.optionalString pkgs.stdenv.isLinux ''
-                wrapProgram $out/bin/lem \
-                  --set FONTCONFIG_FILE "${pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; }}" \
-                  --prefix XDG_DATA_DIRS : "${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}" \
-                  --prefix XDG_DATA_DIRS : "${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}"
-                runHook postInstall
-              '';
+            installPhase = mkWebviewInstallPhase "lem-webview";
           });
 
           lem-webview-app =
@@ -528,7 +592,7 @@
               meta.mainProgram = "lem-webview";
             };
 
-          allLispLibs = commonLispLibs ++ ncursesLispLibs ++ [ cl-webview lem-webview-lib ] ++ (with lisp.pkgs; [
+          allLispLibs = commonLispLibs ++ ncursesLispLibs ++ [ cl-webview lem-ncurses ] ++ (with lisp.pkgs; [
             float-features
             command-line-arguments
           ]);
@@ -578,34 +642,50 @@
           asdfFaslPath = "${lem-base.asdfFasl}/asdf.${lem-base.faslExt}";
 
           lispInitCode = ''
+            (defpackage :nix-cl-user (:use :cl))
+            (in-package :nix-cl-user)
+
             (load "${asdfFaslPath}")
             (pushnew :nix-build *features*)
-            (asdf:initialize-output-translations
-             `(:output-translations
-               (t (,(merge-pathnames ".cache/lem-fasl/" (user-homedir-pathname)) :**/ :*.*.*))
-               :ignore-inherited-configuration))
+
+            ${asdfPathHelpers}
+
+            (defun nix-cl-user::collect-runtime-source-paths ()
+              (remove-duplicates
+               (append
+                (nix-cl-user::collect-paths-from-spec (uiop:getenv "LEM_SOURCE_DIR"))
+                (nix-cl-user::collect-paths-from-spec (uiop:getenv "LEM_EXTENSION_PATHS")))
+               :test #'string=))
+
+            (defun nix-cl-user::configure-runtime-output-translations ()
+              (let ((source-paths (nix-cl-user::collect-runtime-source-paths)))
+                (asdf:initialize-output-translations
+                 `(:output-translations
+                   ,@(mapcar
+                      (lambda (path)
+                        (list
+                         (pathname (concatenate 'string path "**/*.*"))
+                         (merge-pathnames
+                          (concatenate 'string ".cache/lem-fasl" path "**/*.*")
+                          (user-homedir-pathname))))
+                      source-paths)
+                   (#p"/nix/store/**/*.*" #p"/nix/store/**/*.*")
+                   :ignore-inherited-configuration))))
+
+            (defun nix-cl-user::configure-runtime-central-registries ()
+              (nix-cl-user::register-central-registry-spec (uiop:getenv "LEM_EXTENSION_PATHS"))
+              (nix-cl-user::register-central-registry-spec (uiop:getenv "LEM_LIB_PATHS")))
+
+            (defun nix-cl-user::configure-runtime-source-registries ()
+              (nix-cl-user::register-source-registry-tree (uiop:getenv "LEM_SOURCE_DIR")))
+
+            (nix-cl-user::configure-runtime-output-translations)
 
             ;; monkey-patch compile-file* to allow #. and suppress errors
             ${lispMonkeyPatches}
 
-            ;; add nix-provided extensions
-            (with-open-file (f (uiop:getenv "LEM_EXTENSION_PATHS") :if-does-not-exist nil)
-              (when f
-                (loop for line = (read-line f nil nil) while line
-                      when (probe-file line)
-                      do (pushnew (pathname (concatenate 'string line "/")) asdf:*central-registry* :test #'equal))))
-            ;; add lem source directory tree (recursive search for .asd files)
-            (let ((lem-src (uiop:getenv "LEM_SOURCE_DIR")))
-              (when (and lem-src (probe-file lem-src))
-                (asdf:initialize-source-registry
-                 `(:source-registry
-                   (:tree ,(pathname lem-src))
-                   :inherit-configuration))))
-            ;; add nix lisp library paths
-            (with-open-file (f (uiop:getenv "LEM_LIB_PATHS"))
-              (loop for line = (read-line f nil nil) while line
-                    when (probe-file line)
-                    do (pushnew (pathname (concatenate 'string line "/")) asdf:*central-registry* :test #'equal)))
+            (nix-cl-user::configure-runtime-central-registries)
+            (nix-cl-user::configure-runtime-source-registries)
           '';
 
           lemReplEnvSetup = ''
@@ -626,19 +706,14 @@
             exec ${pkgs.sbcl}/bin/sbcl --load "$LEM_INIT" "$@"
           '';
 
-          lem-webview = pkgs.writeShellScriptBin "lem-webview" ''
-            export LEM_SOURCE_DIR="${inputs.lem}/"
-            exec ${lem-repl-bin}/bin/lem-repl --eval '(asdf:load-system "lem-webview")' --eval '(lem-webview:main)' "$@"
-          '';
-
           organ-mode-tests-runner = pkgs.writeShellScriptBin "organ-mode-tests" ''
             exec ${lem-repl-bin}/bin/lem-repl --load "${inputs.organ-mode}/run-tests.lisp" "$@"
           '';
         in {
-          overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old lem-webview-app; };
+          overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-app; };
 
           packages = {
-            inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-old lem-webview-app cl-webview;
+            inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-app cl-webview;
             lem-repl = lem-repl-bin;
             organ-mode-tests = organ-mode-tests-runner;
             default = lem-ncurses;
@@ -648,7 +723,6 @@
             lem-ncurses = { type = "app"; program = lem-ncurses; };
             lem-sdl2 = { type = "app"; program = lem-sdl2; };
             lem-webview = { type = "app"; program = lem-webview; };
-            lem-webview-old = { type = "app"; program = lem-webview-old; };
             lem-webview-app = { type = "app"; program = lem-webview-app; };
             organ-mode-tests = { type = "app"; program = organ-mode-tests-runner; };
             default = { type = "app"; program = lem-ncurses; };
