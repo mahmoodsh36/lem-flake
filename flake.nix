@@ -408,6 +408,10 @@
               frugal-uuid
               hunchentoot
               rove
+              cl-interpol
+              named-readtables
+              cl-ansi-text
+              trivial-package-local-nicknames
             ]);
 
           ncursesLispLibs = with lisp.pkgs; [ cl-charms cl-setlocale ];
@@ -709,6 +713,31 @@
           organ-mode-tests-runner = pkgs.writeShellScriptBin "organ-mode-tests" ''
             exec ${lem-repl-bin}/bin/lem-repl --load "${inputs.organ-mode}/run-tests.lisp" "$@"
           '';
+
+          lemTestsScript = pkgs.writeText "run-lem-tests.lisp" ''
+            (asdf:load-system "rove")
+            (let ((systems (or (cdr sb-ext:*posix-argv*) '("lem-tests" "lem-vi-mode/tests"))))
+              (dolist (sys systems)
+                (format t "~%loading test system: ~A~%" sys)
+                (asdf:load-system sys))
+              (format t "~%running ~D test suites~%" (length (rove:all-suites)))
+              (let ((failed 0)
+                    (total (length (rove:all-suites))))
+                (dolist (suite (rove:all-suites))
+                  (handler-case
+                    (let ((result (rove:run-suite suite)))
+                      (when (and (listp result) (getf result :failed))
+                        (incf failed)))
+                    (error (e)
+                      (format t "~%suite error: ~A~%" e)
+                      (incf failed))))
+                (format t "~%summary: ~D passed, ~D failed~%" (- total failed) failed)
+                (sb-ext:exit :code (if (> failed 0) 1 0))))
+          '';
+
+          lem-tests-runner = pkgs.writeShellScriptBin "lem-tests" ''
+            exec ${lem-repl-bin}/bin/lem-repl --load "${lemTestsScript}" "$@"
+          '';
         in {
           overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-app; };
 
@@ -716,6 +745,7 @@
             inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-app cl-webview;
             lem-repl = lem-repl-bin;
             organ-mode-tests = organ-mode-tests-runner;
+            lem-tests = lem-tests-runner;
             default = lem-ncurses;
           };
 
@@ -725,6 +755,7 @@
             lem-webview = { type = "app"; program = lem-webview; };
             lem-webview-app = { type = "app"; program = lem-webview-app; };
             organ-mode-tests = { type = "app"; program = organ-mode-tests-runner; };
+            lem-tests = { type = "app"; program = lem-tests-runner; };
             default = { type = "app"; program = lem-ncurses; };
           };
 
