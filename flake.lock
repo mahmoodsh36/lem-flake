@@ -108,11 +108,11 @@
     "lem": {
       "flake": false,
       "locked": {
-        "lastModified": 1775977947,
-        "narHash": "sha256-AieYlQ+wPA1qbM3ECoYpkmx6bQ2ZJp4FxgMoSAcqn8k=",
+        "lastModified": 1775825291,
+        "narHash": "sha256-cr6lhtO/g5cpT3J15DI2RspWYAvj0nt40ETyYmxBE/I=",
         "owner": "mahmoodsh36",
         "repo": "lem",
-        "rev": "cb729eb81dff47a6894668ab0f15f861cfefc56c",
+        "rev": "4523b94538ff2a36eb280c01b54f7193e336ac4d",
         "type": "github"
       },
       "original": {
@@ -155,11 +155,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1776360938,
-        "narHash": "sha256-Tq/T/Us82tBQIRuyuZyWR1EMVJ0EStmk/u8qQgsKlVM=",
+        "lastModified": 1776509738,
+        "narHash": "sha256-WiUnhaK3FtJB1nmeDk77B7tPeCkrTMw9fkd6KIn1YxQ=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "67664cad2361605c8fce9712d9ce6a8e026d2380",
+        "rev": "68dfb34604bed7fb9a040c7aebaa19f65ab58599",
         "type": "github"
       },
       "original": {
