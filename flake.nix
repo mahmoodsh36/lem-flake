@@ -715,8 +715,13 @@
           '';
 
           lemTestsScript = pkgs.writeText "run-lem-tests.lisp" ''
+            (asdf:load-system "cffi")
+            (let ((lib (uiop:getenv "LIBTREE_SITTER_PATH")))
+              (when (and lib (probe-file lib))
+                (cffi:load-foreign-library lib)))
             (asdf:load-system "rove")
-            (let ((systems (or (cdr sb-ext:*posix-argv*) '("lem-tests" "lem-vi-mode/tests"))))
+            (let ((systems (or (cdr sb-ext:*posix-argv*)
+                               '("lem-tests" "lem-vi-mode/tests" "lem-transient/tests"))))
               (dolist (sys systems)
                 (format t "~%loading test system: ~A~%" sys)
                 (asdf:load-system sys))
@@ -736,6 +741,8 @@
           '';
 
           lem-tests-runner = pkgs.writeShellScriptBin "lem-tests" ''
+            export LIBTREE_SITTER_PATH="${pkgs.tree-sitter}/lib/libtree-sitter${if pkgs.stdenv.isDarwin then ".dylib" else ".so"}"
+            export DYLD_FALLBACK_LIBRARY_PATH="${pkgs.tree-sitter}/lib:${pkgs.lib.makeLibraryPath lemReplNativeLibs}:''${DYLD_FALLBACK_LIBRARY_PATH:-}"
             exec ${lem-repl-bin}/bin/lem-repl --load "${lemTestsScript}" "$@"
           '';
         in {
