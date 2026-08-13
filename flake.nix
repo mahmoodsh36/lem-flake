@@ -464,6 +464,21 @@
                 --prefix LD_LIBRARY_PATH : "$LD_LIBRARY_PATH:${treeSitterLibPath}" \
                 --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
             ''
+            + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+              # the .app is started by launchd with a bare PATH, so re-exec once
+              # through a login shell to pick up the user's env
+              mv $out/bin/${binaryName} $out/bin/.${binaryName}-env-wrapped
+              cat > $out/bin/${binaryName} <<EOF
+              #!/bin/sh
+              login_shell="\''${SHELL:-/bin/zsh}"
+              if [ -z "\$LEM_LOGIN_ENV" ] && [ -x "\$login_shell" ]; then
+                export LEM_LOGIN_ENV=1
+                exec "\$login_shell" -lc 'exec "\$0" "\$@"' $out/bin/.${binaryName}-env-wrapped "\$@"
+              fi
+              exec $out/bin/.${binaryName}-env-wrapped "\$@"
+              EOF
+              chmod +x $out/bin/${binaryName}
+            ''
             + pkgs.lib.optionalString pkgs.stdenv.isLinux ''
               wrapProgram $out/bin/${binaryName} \
                 --set FONTCONFIG_FILE "${pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; }}" \
