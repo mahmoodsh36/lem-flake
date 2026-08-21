@@ -40,11 +40,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1787261467,
-        "narHash": "sha256-4klX9FVMS6PtzTY/VyL6fXRNunUfYyhNYnOS2VrYWE4=",
+        "lastModified": 1787327545,
+        "narHash": "sha256-X8zV/kqy9ItohKd5qevCJAg4j6VJnx/8AlmOaiuC7Sw=",
         "owner": "mahmoodsh36",
         "repo": "cltpt",
-        "rev": "dff86b21436983aa11238361dfd2d62d11994811",
+        "rev": "80b6505c7a19cf8c233dc8aa9659058a096754bd",
         "type": "github"
       },
       "original": {
