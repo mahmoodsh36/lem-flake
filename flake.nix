@@ -437,6 +437,7 @@
               mkdir -p $out/bin
               install lem $out/bin
               wrapProgram $out/bin/lem \
+                --add-flags "--dynamic-space-size 4096" \
                 --prefix LD_LIBRARY_PATH : "$LD_LIBRARY_PATH" \
                 --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
               runHook postInstall
@@ -448,6 +449,7 @@
             mkdir -p $out/bin
             install lem $out/bin
             wrapProgram $out/bin/lem \
+              --add-flags "--dynamic-space-size 4096" \
               --prefix LD_LIBRARY_PATH : "$LD_LIBRARY_PATH:${treeSitterLibPath}" \
               --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
             runHook postInstall
@@ -460,6 +462,7 @@
               mkdir -p $out/bin
               install lem $out/bin/${binaryName}
               wrapProgram $out/bin/${binaryName} \
+                --add-flags "--dynamic-space-size 4096" \
                 --set LEM_EXTENSION_PATHS "${inputs.organ-mode}" \
                 --prefix LD_LIBRARY_PATH : "$LD_LIBRARY_PATH:${treeSitterLibPath}" \
                 --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
@@ -470,6 +473,14 @@
               mv $out/bin/${binaryName} $out/bin/.${binaryName}-env-wrapped
               cat > $out/bin/${binaryName} <<EOF
               #!/bin/sh
+              # launchd throws stderr away, and sbcl's fatal messages (heap
+              # exhaustion, ldb) only ever go there: keep them in a file
+              if [ -z "\$LEM_STDERR_LOGGED" ] && ! [ -t 2 ]; then
+                export LEM_STDERR_LOGGED=1
+                mkdir -p "\$HOME/.lem"
+                printf '==== %s ${binaryName} start (pid %s) ====\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$\$" >> "\$HOME/.lem/stderr.log"
+                exec 2>>"\$HOME/.lem/stderr.log"
+              fi
               login_shell="\''${SHELL:-/bin/zsh}"
               if [ -z "\$LEM_LOGIN_ENV" ] && [ -x "\$login_shell" ]; then
                 export LEM_LOGIN_ENV=1
