@@ -197,8 +197,17 @@
               (pushnew 'nix-cl-user::configure-asdf-for-runtime uiop:*image-restore-hook*)
 
               ;; dump image
+              ;; not uiop:dump-image: it forces :save-runtime-options t, so the
+              ;; image ignores --dynamic-space-size and opens it as a file instead
               (setf uiop:*image-entry-point* #'${entryPoint})
-              (uiop:dump-image "lem" :executable t :compression t)
+              (setf uiop:*image-dumped-p* :executable)
+              (uiop:call-image-dump-hook)
+              (setf sb-ext::*gc-run-time* 0)
+              (sb-ext:save-lisp-and-die "lem"
+                                        :executable t
+                                        :compression t
+                                        :save-runtime-options nil
+                                        :toplevel #'uiop:restore-image)
             '';
 
           micros = mkSimpleASDFSystem {
@@ -437,7 +446,7 @@
               mkdir -p $out/bin
               install lem $out/bin
               wrapProgram $out/bin/lem \
-                --add-flags "--dynamic-space-size 4096" \
+                --add-flags "--dynamic-space-size 4096 --end-runtime-options" \
                 --prefix LD_LIBRARY_PATH : "$LD_LIBRARY_PATH" \
                 --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
               runHook postInstall
@@ -449,7 +458,7 @@
             mkdir -p $out/bin
             install lem $out/bin
             wrapProgram $out/bin/lem \
-              --add-flags "--dynamic-space-size 4096" \
+              --add-flags "--dynamic-space-size 4096 --end-runtime-options" \
               --prefix LD_LIBRARY_PATH : "$LD_LIBRARY_PATH:${treeSitterLibPath}" \
               --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
             runHook postInstall
@@ -462,7 +471,7 @@
               mkdir -p $out/bin
               install lem $out/bin/${binaryName}
               wrapProgram $out/bin/${binaryName} \
-                --add-flags "--dynamic-space-size 4096" \
+                --add-flags "--dynamic-space-size 4096 --end-runtime-options" \
                 --set LEM_EXTENSION_PATHS "${inputs.organ-mode}" \
                 --prefix LD_LIBRARY_PATH : "$LD_LIBRARY_PATH:${treeSitterLibPath}" \
                 --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
