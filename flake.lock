@@ -187,11 +187,11 @@
     "organ-mode": {
       "flake": false,
       "locked": {
-        "lastModified": 1787075270,
-        "narHash": "sha256-k3mIQw0bx0uPTk19oNh69jTxEcIMatngZScKyYHrCCg=",
+        "lastModified": 1787425144,
+        "narHash": "sha256-N/RMdrpoNC5yBDphuGJ+4l6OMESYlMtcJTwmVpH59sU=",
         "owner": "mahmoodsh36",
         "repo": "organ-mode",
-        "rev": "4e1f638d8fe2c8049f48c652505b78d21268ef93",
+        "rev": "98f428336dfbc04dbdb03a68437990e2267d7ed4",
         "type": "github"
       },
       "original": {
