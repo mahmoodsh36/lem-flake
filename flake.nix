@@ -617,7 +617,14 @@
             pkgs.stdenv.mkDerivation {
               pname = "lem-webview-app";
               version = "unstable";
-              nativeBuildInputs = pkgs.lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.desktopToDarwinBundle;
+              # nixpkgs write-darwin-bundle has no shebang, so bash runs it in a forked
+              # subshell which segfaults, shadow it with a proper script.
+              nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
+                (pkgs.writeShellScriptBin "write-darwin-bundle" ''
+                  exec ${pkgs.bash}/bin/bash ${pkgs.writeDarwinBundle}/bin/write-darwin-bundle "$@"
+                '')
+                pkgs.desktopToDarwinBundle
+              ];
               buildInputs = [ lem-webview ];
               dontUnpack = true;
               installPhase = ''
