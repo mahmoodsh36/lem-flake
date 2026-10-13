@@ -312,6 +312,26 @@
             '';
           };
 
+          # lem-terminal/ffi.lisp loads it by the literal name "terminal.so", even on darwin
+          terminal-so = pkgs.stdenv.mkDerivation {
+            pname = "lem-terminal-so";
+            version = "unstable";
+            src = "${inputs.lem}/extensions/terminal";
+            buildInputs = [ pkgs.libvterm-neovim ];
+            buildPhase = ''
+              $CC -shared -fPIC -o terminal.so terminal.c \
+                -I${pkgs.libvterm-neovim}/include \
+                -L${pkgs.libvterm-neovim}/lib -lvterm -lutil
+            '';
+            installPhase = ''
+              mkdir -p $out/lib
+              cp terminal.so $out/lib/
+            '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+              # the lisp setup hook only puts dirs holding a .dylib on DYLD_LIBRARY_PATH
+              ln -s terminal.so $out/lib/terminal.dylib
+            '';
+          };
+
           treeSitterNativeLibs = [ pkgs.tree-sitter ts-wrapper ];
           treeSitterLibPath = pkgs.lib.concatMapStringsSep ":" toString treeSitterGrammars;
 
@@ -514,7 +534,7 @@
             meta.mainProgram = "lem";
             systems = [ "lem-ncurses" "tree-sitter-cl" "lem-tree-sitter" ];
             lispLibs = o.lispLibs ++ ncursesLispLibs;
-            nativeLibs = [ pkgs.ncurses ] ++ treeSitterNativeLibs;
+            nativeLibs = [ pkgs.ncurses terminal-so ] ++ treeSitterNativeLibs;
             installPhase = frontendInstallPhase;
           });
 
@@ -528,7 +548,7 @@
               sdl2-image
               trivial-main-thread
             ]);
-            nativeLibs = (with pkgs; [ SDL2 SDL2_ttf SDL2_image ]) ++ treeSitterNativeLibs;
+            nativeLibs = (with pkgs; [ SDL2 SDL2_ttf SDL2_image ]) ++ [ terminal-so ] ++ treeSitterNativeLibs;
             installPhase = frontendInstallPhase;
           });
 
@@ -548,7 +568,7 @@
               trivial-types
             ]);
 
-            nativeLibs = [ c-webview ]
+            nativeLibs = [ c-webview terminal-so ]
               ++ treeSitterNativeLibs
               ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
                  pkgs.webkitgtk_4_1
@@ -680,7 +700,7 @@
           };
 
           lemReplNativeLibs =
-            [ pkgs.ncurses pkgs.openssl c-webview async-process-native ]
+            [ pkgs.ncurses pkgs.openssl c-webview async-process-native terminal-so ]
             ++ treeSitterNativeLibs
             ++ treeSitterGrammars
             ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.webkitgtk_4_1 pkgs.gtk3 pkgs.stdenv.cc.cc.lib ];
