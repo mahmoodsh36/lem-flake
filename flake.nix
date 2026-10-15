@@ -339,7 +339,20 @@
           tree-sitter-cl = lisp.buildASDFSystem {
             pname = "tree-sitter-cl";
             version = "unstable";
-            src = inputs.tree-sitter-cl;
+            src = pkgs.applyPatches {
+              name = "tree-sitter-cl-src";
+              src = inputs.tree-sitter-cl;
+              # static/ holds a homebrew-built wrapper (links libtree-sitter 0.26) that cffi
+              # finds before ours, and cffi counts darwin as :unix, so .so names shadow .dylib
+              postPatch = ''
+                rm -rf static
+                substituteInPlace src/ffi.lisp \
+                  --replace-fail '(:unix (:or "libtree-sitter.so.0"' \
+                                 '(:darwin (:or "libtree-sitter.0.dylib" "libtree-sitter.dylib")) (:unix (:or "libtree-sitter.so.0"' \
+                  --replace-fail '(:unix "libts-wrapper.so")' \
+                                 '(:darwin "libts-wrapper.dylib") (:unix "libts-wrapper.so")'
+              '';
+            };
             systems = [ "tree-sitter-cl" ];
             lispLibs = with lisp.pkgs; [
               cffi
