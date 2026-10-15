@@ -293,6 +293,7 @@
             tree-sitter-go
             tree-sitter-perl
             tree-sitter-clojure
+            tree-sitter-latex
           ];
 
           ts-wrapper = pkgs.stdenv.mkDerivation {
