@@ -1,0 +1,3 @@
+/* only the page: no tabs, toolbars or sidebars */
+#TabsToolbar, #nav-bar, #PersonalToolbar, #sidebar-box, #sidebar-main,
+#titlebar #TabsToolbar, .titlebar-spacer { visibility: collapse !important; }

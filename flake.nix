@@ -637,19 +637,20 @@
             installPhase = mkWebviewInstallPhase "lem-webview";
           });
 
-          lem-webview-app =
+          # a .app on darwin, a .desktop entry elsewhere, for one lem binary
+          mkLemApp =
+            { pname, package, binary, name, desktopName }:
             let
               desktopItem = pkgs.makeDesktopItem {
-                name = "lem";
-                exec = "lem-webview";
+                inherit name desktopName;
+                exec = binary;
                 icon = "lem";
-                desktopName = "Lem";
                 genericName = "Text Editor";
                 categories = [ "Development" "TextEditor" ];
               };
             in
             pkgs.stdenv.mkDerivation {
-              pname = "lem-webview-app";
+              inherit pname;
               version = "unstable";
               # nixpkgs write-darwin-bundle has no shebang, so bash runs it in a forked
               # subshell which segfaults, shadow it with a proper script.
@@ -659,18 +660,100 @@
                 '')
                 pkgs.desktopToDarwinBundle
               ];
-              buildInputs = [ lem-webview ];
+              buildInputs = [ package ];
               dontUnpack = true;
               installPhase = ''
                 runHook preInstall
                 mkdir -p $out/bin
-                ln -s ${lem-webview}/bin/lem-webview $out/bin/lem-webview
+                ln -s ${package}/bin/${binary} $out/bin/${binary}
                 mkdir -p $out/share/applications
                 cp -r ${desktopItem}/share/applications/* $out/share/applications/
                 runHook postInstall
               '';
-              meta.mainProgram = "lem-webview";
+              meta.mainProgram = binary;
             };
+
+          lem-webview-app = mkLemApp {
+            pname = "lem-webview-app";
+            package = lem-webview;
+            binary = "lem-webview";
+            name = "lem";
+            desktopName = "Lem";
+          };
+
+          # the server frontend alone, for a browser to show
+          lem-server = lem-webview-lib.overrideLispAttrs (o: {
+            pname = "lem-server";
+            meta.mainProgram = "lem-server";
+            LEM_EXTENSION_PATHS = toString inputs.organ-mode;
+            buildScript = mkBuildScript {
+              entryPoint = "lem-server:main";
+              faslTranslationPaths = [ (toString inputs.organ-mode) ];
+            };
+            nativeBuildInputs = (o.nativeBuildInputs or []) ++ [ pkgs.makeBinaryWrapper ];
+            installPhase = mkWebviewInstallPhase "lem-server";
+          });
+
+          # lem's server frontend in firefox with ublock origin, for web pages in lem windows.
+          # the lisp side is lem-config/extra/gecko.
+          lem-gecko-browser =
+            let
+              ublock = pkgs.fetchFirefoxAddon {
+                name = "ublock-origin";
+                url = "https://addons.mozilla.org/firefox/downloads/file/5034826/ublock_origin-1.75.0.xpi";
+                hash = "sha256-W3RBWGBFY3BkS9gPFhJehlsObDVrtd/PuEBpln6qUoc=";
+                fixedExtid = "uBlock0@raymondhill.net";
+              };
+              lem-frames = pkgs.fetchFirefoxAddon {
+                name = "lem-frames";
+                src = pkgs.runCommand "lem-frames.zip" { nativeBuildInputs = [ pkgs.zip pkgs.jq ]; } ''
+                  # zip keeps the read-only store modes, and the addon builder has to write to the files
+                  cp -r ${./gecko/extension} ext && chmod -R u+w ext && cd ext
+                  # firefox does not reinstall an addon with the same version, so the version comes from a hash
+                  build=$((16#$(cat *.js manifest.json | sha256sum | cut -c1-7)))
+                  jq --arg v "0.1.$build" '.version = $v' manifest.json > m && mv m manifest.json
+                  zip -r -q $out .
+                '';
+                fixedExtid = "lem-frames@lem";
+              };
+              addon = a: {
+                installation_mode = "force_installed";
+                install_url = "file://${a}/${a.extid}.xpi";
+              };
+            in
+            # devedition tracks firefox releases and allows unsigned extensions, firefox does not
+            pkgs.wrapFirefox pkgs.firefox-devedition-unwrapped {
+              extraPolicies.ExtensionSettings = {
+                "${ublock.extid}" = addon ublock;
+                "${lem-frames.extid}" = addon lem-frames;
+              };
+              extraPrefs = ''
+                lockPref("xpinstall.signatures.required", false);
+              '';
+            };
+
+          lem-gecko = pkgs.writeShellApplication {
+            name = "lem-gecko";
+            runtimeInputs = [ pkgs.coreutils pkgs.netcat pkgs.lsof ];
+            # no errexit, the loop expects some probes to fail
+            bashOptions = [ "nounset" "pipefail" ];
+            text = builtins.replaceStrings
+              [ "@server@" "@browser@" "@userjs@" "@userchrome@" ]
+              [ "${lem-server}/bin/lem-server"
+                (if pkgs.stdenv.isDarwin
+                 then "'${lem-gecko-browser}/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox-devedition'"
+                 else pkgs.lib.getExe lem-gecko-browser)
+                "${./gecko/user.js}" "${./gecko/userChrome.css}" ]
+              (builtins.readFile ./gecko/launch.sh);
+          };
+
+          lem-gecko-app = mkLemApp {
+            pname = "lem-gecko-app";
+            package = lem-gecko;
+            binary = "lem-gecko";
+            name = "lem-gecko";
+            desktopName = "Lem Gecko";
+          };
 
           allLispLibs = commonLispLibs ++ ncursesLispLibs ++ [ cl-webview lem-ncurses ] ++ (with lisp.pkgs; [
             float-features
@@ -822,10 +905,11 @@
             exec ${lem-repl-bin}/bin/lem-repl --load "${lemTestsScript}" "$@"
           '';
         in {
-          overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-app; };
+          overlayAttrs = { inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-app lem-gecko lem-gecko-app; };
 
           packages = {
             inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-app cl-webview;
+            inherit lem-server lem-gecko lem-gecko-app lem-gecko-browser;
             lem-repl = lem-repl-bin;
             organ-mode-tests = organ-mode-tests-runner;
             lem-tests = lem-tests-runner;
@@ -837,6 +921,7 @@
             lem-sdl2 = { type = "app"; program = lem-sdl2; };
             lem-webview = { type = "app"; program = lem-webview; };
             lem-webview-app = { type = "app"; program = lem-webview-app; };
+            lem-gecko = { type = "app"; program = lem-gecko; };
             organ-mode-tests = { type = "app"; program = organ-mode-tests-runner; };
             lem-tests = { type = "app"; program = lem-tests-runner; };
             default = { type = "app"; program = lem-ncurses; };
