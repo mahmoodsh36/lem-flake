@@ -119,13 +119,33 @@ const idOfFrame = (frameId) => {
   return null;
 };
 
+const isMac = navigator.userAgent.includes('Mac OS X');
+let grantedAt = -Infinity;
+
+const webFrameFocused = () => {
+  const active = document.activeElement;
+  return Boolean(active && active.dataset && active.dataset.lemWeb);
+};
+
 browser.runtime.onMessage.addListener((message) => {
   switch (message.type) {
     case 'key': {
       const input = lemInput();
       if (!input) return;
       input.focus();
-      input.dispatchEvent(new KeyboardEvent('keydown', { ...message.key, bubbles: true, cancelable: true }));
+      const k = message.key;
+      // off macos lem's client reads plain characters from input events, not keydown
+      if (!isMac && !k.ctrlKey && !k.altKey && k.key.length === 1) {
+        input.dispatchEvent(new InputEvent('input', { data: k.key, inputType: 'insertText', bubbles: true }));
+      } else {
+        input.dispatchEvent(new KeyboardEvent('keydown', { ...k, bubbles: true, cancelable: true }));
+      }
+      return;
+    }
+    case 'unfocus': {
+      // unless lem just handed the page the focus itself
+      const input = lemInput();
+      if (input && webFrameFocused() && performance.now() - grantedAt > 1500) input.focus();
       return;
     }
     case 'nav': {
@@ -146,10 +166,25 @@ window.addEventListener('message', (e) => {
   const entry = frames.get(d.id);
   if (!entry) return;
   const action = d.type.slice('lem-web-'.length);
+  const toPage = (message) => {
+    const frameId = frameIdOf(entry);
+    if (frameId !== null) browser.runtime.sendMessage({ type: 'to-page', frameId, message });
+  };
   if (action === 'close') {
     entry.frame.remove();
     frames.delete(d.id);
   } else if (['back', 'forward', 'reload'].includes(action)) {
     browser.runtime.sendMessage({ type: 'history', frameId: frameIdOf(entry), action });
+  } else if (action === 'pass') {
+    toPage({ type: 'pass', on: Boolean(d.on) });
+    if (d.on) {
+      grantedAt = performance.now();
+      entry.frame.focus();
+    } else if (webFrameFocused()) {
+      const input = lemInput();
+      if (input) input.focus();
+    }
+  } else if (action === 'scroll') {
+    toPage({ type: 'scroll', how: String(d.how), count: Number(d.count) || 1 });
   }
 });

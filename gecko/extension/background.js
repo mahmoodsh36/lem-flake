@@ -67,13 +67,38 @@ const toTop = (tabId, message) =>
 const isPageFrame = (sender) =>
   sender.tab && sender.frameId !== 0 && isLem(sender.tab.url) && sender.url !== 'about:srcdoc';
 
+// lem knows a page by its frame directly under the editor
+const rootOf = async (tabId, frameId) => {
+  for (let i = 0; i < 32; i++) {
+    const frame = await browser.webNavigation.getFrame({ tabId, frameId });
+    if (!frame || frame.parentFrameId <= 0) return frameId;
+    frameId = frame.parentFrameId;
+  }
+  return frameId;
+};
+
+// "tabId:root" of pages that have the keyboard
+const passing = new Set();
+
 browser.runtime.onMessage.addListener((message, sender) => {
   switch (message.type) {
-    case 'hello':
-      return Promise.resolve({ underLem: isPageFrame(sender) });
+    case 'hello': {
+      if (!isPageFrame(sender)) return Promise.resolve({ underLem: false });
+      return rootOf(sender.tab.id, sender.frameId).then((root) =>
+        ({ underLem: true, root, pass: passing.has(`${sender.tab.id}:${root}`) }));
+    }
     case 'key':
+    case 'unfocus':
       if (isPageFrame(sender)) toTop(sender.tab.id, message);
       return;
+    case 'to-page': {
+      // sent to every frame, each keeps what matches its root
+      if (sender.frameId !== 0 || !sender.tab || !isLem(sender.tab.url)) return;
+      const m = { ...message.message, root: message.frameId };
+      const key = `${sender.tab.id}:${message.frameId}`;
+      if (m.type === 'pass') { if (m.on) passing.add(key); else passing.delete(key); }
+      return browser.tabs.sendMessage(sender.tab.id, m).catch(() => {});
+    }
     case 'title':
       if (isPageFrame(sender)) toTop(sender.tab.id, { type: 'nav', frameId: sender.frameId, title: message.title });
       return;
