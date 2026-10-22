@@ -922,6 +922,7 @@
             lem-webview = { type = "app"; program = lem-webview; };
             lem-webview-app = { type = "app"; program = lem-webview-app; };
             lem-gecko = { type = "app"; program = lem-gecko; };
+            lem-gecko-app = { type = "app"; program = lem-gecko-app; };
             organ-mode-tests = { type = "app"; program = organ-mode-tests-runner; };
             lem-tests = { type = "app"; program = lem-tests-runner; };
             default = { type = "app"; program = lem-ncurses; };
