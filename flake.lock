@@ -40,11 +40,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1792873200,
-        "narHash": "sha256-79kTLf1r0BwhWgyiP9VCJA+gjXt+C3rzZdmlcNdnSQU=",
+        "lastModified": 1792922241,
+        "narHash": "sha256-3bSwoRh8J+ek7rS1fKGQE/LeEHJe9OtwEq04ugdVLGU=",
         "owner": "mahmoodsh36",
         "repo": "cltpt",
-        "rev": "4be5ed29be8dea0b09cd4ecd2b93f05fadaea911",
+        "rev": "8e00059384bce3016233fb44d7eff745a4952d5c",
         "type": "github"
       },
       "original": {
@@ -187,11 +187,11 @@
     "organ-mode": {
       "flake": false,
       "locked": {
-        "lastModified": 1792869855,
-        "narHash": "sha256-8n/z70J8u4NVardgoL43Jxi2kfxanMEXwFopFRSFaYc=",
+        "lastModified": 1792968684,
+        "narHash": "sha256-+7R7Nt8LRpz8tsvdPAdDWj6g3ff54oJQVCoSaI6AifM=",
         "owner": "mahmoodsh36",
         "repo": "organ-mode",
-        "rev": "769e4ae49eba5b331ec695b2ac1984471699432b",
+        "rev": "2d69ec3e06ad8986d71b98de72386f367a4b9a0b",
         "type": "github"
       },
       "original": {
