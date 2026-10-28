@@ -451,6 +451,7 @@
               frugal-uuid
               hunchentoot
               rove
+              cl-template
               cl-interpol
               named-readtables
               cl-ansi-text
