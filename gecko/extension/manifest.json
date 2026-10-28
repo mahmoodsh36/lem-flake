@@ -4,7 +4,7 @@
   "version": "0.1",
   "description": "show web pages inside lem windows",
   "browser_specific_settings": { "gecko": { "id": "lem-frames@lem" } },
-  "permissions": ["webRequest", "webRequestBlocking", "webNavigation", "tabs", "<all_urls>"],
+  "permissions": ["webRequest", "webRequestBlocking", "webNavigation", "tabs", "clipboardRead", "<all_urls>"],
   "background": { "scripts": ["background.js"] },
   "content_scripts": [
     { "matches": ["http://127.0.0.1/*", "http://localhost/*"],

@@ -706,12 +706,9 @@
               };
               lem-frames = pkgs.fetchFirefoxAddon {
                 name = "lem-frames";
-                src = pkgs.runCommand "lem-frames.zip" { nativeBuildInputs = [ pkgs.zip pkgs.jq ]; } ''
+                src = pkgs.runCommand "lem-frames.zip" { nativeBuildInputs = [ pkgs.zip ]; } ''
                   # zip keeps the read-only store modes, and the addon builder has to write to the files
                   cp -r ${./gecko/extension} ext && chmod -R u+w ext && cd ext
-                  # firefox does not reinstall an addon with the same version, so the version comes from a hash
-                  build=$((16#$(cat *.js manifest.json | sha256sum | cut -c1-7)))
-                  jq --arg v "0.1.$build" '.version = $v' manifest.json > m && mv m manifest.json
                   zip -r -q $out .
                 '';
                 fixedExtid = "lem-frames@lem";
@@ -729,21 +726,26 @@
               };
               extraPrefs = ''
                 lockPref("xpinstall.signatures.required", false);
+                // cmd+t opens a tab over lem before the page sees it (macos menu shortcut), without it lem gets M-t
+                Services.obs.addObserver((win) => {
+                  win.document.getElementById("key_newNavigatorTab")?.remove();
+                  win.document.getElementById("menu_newNavigatorTab")?.removeAttribute("key");
+                }, "browser-delayed-startup-finished");
               '';
-            };
+            } // { lemFrames = "${lem-frames}/${lem-frames.extid}.xpi"; };
 
           lem-gecko = pkgs.writeShellApplication {
             name = "lem-gecko";
-            runtimeInputs = [ pkgs.coreutils pkgs.netcat pkgs.lsof ];
+            runtimeInputs = [ pkgs.coreutils pkgs.diffutils pkgs.netcat pkgs.lsof ];
             # no errexit, the loop expects some probes to fail
             bashOptions = [ "nounset" "pipefail" ];
             text = builtins.replaceStrings
-              [ "@server@" "@browser@" "@userjs@" "@userchrome@" ]
+              [ "@server@" "@browser@" "@userjs@" "@userchrome@" "@lemframes@" ]
               [ "${lem-server}/bin/lem-server"
                 (if pkgs.stdenv.isDarwin
                  then "'${lem-gecko-browser}/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox-devedition'"
                  else pkgs.lib.getExe lem-gecko-browser)
-                "${./gecko/user.js}" "${./gecko/userChrome.css}" ]
+                "${./gecko/user.js}" "${./gecko/userChrome.css}" lem-gecko-browser.lemFrames ]
               (builtins.readFile ./gecko/launch.sh);
           };
 

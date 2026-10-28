@@ -8,6 +8,13 @@ window.addEventListener('message', (e) => {
   if (e.data && e.data.type === 'invoke-lem' && e.origin !== location.origin) e.stopImmediatePropagation();
 }, true);
 
+// lem asks the page for the clipboard on yank. read by the extension, so firefox shows no paste
+// prompt; framed pages keep the prompt.
+exportFunction(() => new window.wrappedJSObject.Promise(exportFunction((resolve, reject) => {
+  browser.runtime.sendMessage({ type: 'clipboard-read' })
+    .then((text) => resolve(text ?? ''), (e) => reject(String(e)));
+}, window)), window.wrappedJSObject.navigator.clipboard, { defineAs: 'readText' });
+
 const SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox '
   + 'allow-modals allow-downloads allow-pointer-lock allow-presentation allow-storage-access-by-user-activation';
 const ALLOW = 'fullscreen; autoplay; clipboard-read; clipboard-write; encrypted-media; picture-in-picture; '

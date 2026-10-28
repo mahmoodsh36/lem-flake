@@ -5,6 +5,11 @@ mkdir -p "$profile/chrome"
 cp -f @userjs@ "$profile/user.js"
 cp -f @userchrome@ "$profile/chrome/userChrome.css"
 chmod u+w "$profile/user.js" "$profile/chrome/userChrome.css"
+# firefox will not take a policy addon whose version is not higher, and trusts its startup cache
+# over the extensions dir. so a changed lem-frames is removed and the policy installs it fresh.
+if [ -f "$profile/extensions/lem-frames@lem.xpi" ] && ! cmp -s "$profile/extensions/lem-frames@lem.xpi" @lemframes@; then
+  rm -f "$profile/extensions/lem-frames@lem.xpi" "$profile/addonStartup.json.lz4"
+fi
 
 port="${LEM_GECKO_PORT:-}"
 if [ -z "$port" ]; then

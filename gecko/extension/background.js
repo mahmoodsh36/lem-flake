@@ -102,6 +102,9 @@ browser.runtime.onMessage.addListener((message, sender) => {
     case 'title':
       if (isPageFrame(sender)) toTop(sender.tab.id, { type: 'nav', frameId: sender.frameId, title: message.title });
       return;
+    case 'clipboard-read':
+      if (sender.frameId !== 0 || !sender.tab || !isLem(sender.tab.url)) return;
+      return navigator.clipboard.readText();
     case 'history':
       return browser.tabs.executeScript(sender.tab.id, {
         frameId: message.frameId,
@@ -128,5 +131,17 @@ browser.webNavigation.onCreatedNavigationTarget.addListener((details) => {
     if (!isLem(tab.url) || details.sourceFrameId === 0) return;
     browser.tabs.remove(details.tabId).catch(() => {});
     toTop(details.sourceTabId, { type: 'open', url: details.url });
+  }, () => {});
+});
+
+// with the tab bar hidden, a new tab (say from the file menu) would cover lem with no way back.
+// cmd+t is unbound in the flake. tabs a page opens have an opener and are handled above.
+browser.tabs.onCreated.addListener((tab) => {
+  if (tab.openerTabId !== undefined) return;
+  browser.tabs.query({ windowId: tab.windowId }).then((tabs) => {
+    const lem = tabs.find((t) => t.id !== tab.id && isLem(t.url));
+    if (!lem) return;
+    browser.tabs.remove(tab.id).catch(() => {});
+    browser.tabs.update(lem.id, { active: true }).catch(() => {});
   }, () => {});
 });
