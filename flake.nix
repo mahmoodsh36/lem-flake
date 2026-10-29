@@ -79,14 +79,26 @@
               inherit src systems lispLibs;
             };
 
-          # allow #. when compiling (bt2 threads bind *read-eval* nil); asdf still reports failures
+          # lem runs init.lisp in a thread made by bordeaux-threads, which turns
+          # *read-eval* off, so any #. in code compiled from there fails to read.
+          # turn it back on while compiling.
           lispMonkeyPatches = ''
             (let ((original (symbol-function 'uiop/lisp-build:compile-file*)))
               (setf (symbol-function 'uiop/lisp-build:compile-file*)
                     (lambda (input-file &rest keys)
-                      (let ((*read-eval* t)
-                            (sb-ext:*on-package-variance* nil))
+                      (let ((*read-eval* t))
                         (apply original input-file keys)))))
+          '';
+
+          # loaded first by lem.asd, so the patch is in the dumped image too
+          patchAsdfStep = ''
+            cat > configure-asdf.lisp <<EOF
+            (defpackage :nix-build-config (:use :cl))
+            (in-package :nix-build-config)
+
+            ${lispMonkeyPatches}
+            EOF
+            sed -i '1i(load "configure-asdf.lisp")' lem.asd
           '';
 
           asdfPathHelpers = ''
@@ -463,6 +475,7 @@
             lispLibs = commonLispLibs;
             postPatch = ''
               sed -i '1i(pushnew :nix-build *features*)' lem.asd
+              ${patchAsdfStep}
             '';
             LEM_EXTENSION_PATHS = toString inputs.organ-mode;
             buildScript = mkBuildScript {
@@ -597,14 +610,7 @@
               # add organ-mode path manually to ASDF registry so it can be found during build
               sed -i '1i(pushnew (pathname "${inputs.organ-mode}/") asdf:*central-registry* :test #'\'''equal)' lem.asd
 
-              # monkey-patch compile-file* to allow #. and suppress errors
-              cat > configure-asdf.lisp <<EOF
-              (defpackage :nix-build-config (:use :cl))
-              (in-package :nix-build-config)
-
-              ${lispMonkeyPatches}
-              EOF
-              sed -i '1i(load "configure-asdf.lisp")' lem.asd
+              ${patchAsdfStep}
             '' + (
                 if pkgs.stdenv.isLinux
                 then ''sed -i 's/fontName:"Monospace"/fontName:"DejaVu Sans Mono"/' frontends/server/frontend/dist/assets/index.js''
