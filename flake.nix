@@ -79,21 +79,14 @@
               inherit src systems lispLibs;
             };
 
-          # common monkey-patches for ASDF/SBCL build process
+          # allow #. when compiling (bt2 threads bind *read-eval* nil); asdf still reports failures
           lispMonkeyPatches = ''
-            (setf (symbol-function 'uiop/lisp-build:compile-file*)
-                  (lambda (input-file &key output-file (external-format :utf-8) &allow-other-keys)
-                    (when output-file (ensure-directories-exist output-file))
-                    (let ((*read-eval* t) (sb-ext:*on-package-variance* nil))
-                      (multiple-value-bind (truename warnings-p failure-p)
-                          (compile-file input-file :output-file output-file :external-format external-format)
-                        (declare (ignore failure-p warnings-p))
-                        (values (or truename (when (and output-file (probe-file output-file)) (truename output-file))) nil nil)))))
-
-            (setf (symbol-function 'uiop/lisp-build:check-lisp-compile-results)
-                  (lambda (output-truename warnings-p failure-p &optional context-format context-arguments)
-                    (declare (ignore context-format context-arguments failure-p warnings-p))
-                    output-truename))
+            (let ((original (symbol-function 'uiop/lisp-build:compile-file*)))
+              (setf (symbol-function 'uiop/lisp-build:compile-file*)
+                    (lambda (input-file &rest keys)
+                      (let ((*read-eval* t)
+                            (sb-ext:*on-package-variance* nil))
+                        (apply original input-file keys)))))
           '';
 
           asdfPathHelpers = ''
