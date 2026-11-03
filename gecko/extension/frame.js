@@ -57,7 +57,13 @@ if (window !== window.top) {
     || el.tagName === 'TEXTAREA'
     || (el.tagName === 'INPUT' && !/^(button|checkbox|radio|submit|reset|range|color|file|image)$/.test(el.type)));
 
+  // a key sent to lem must not open the page's menu either (see top.js)
+  let keyMenu = false;
+  window.addEventListener('contextmenu', (e) => { if (keyMenu) e.preventDefault(); }, true);
+  for (const type of ['keyup', 'pointerdown']) window.addEventListener(type, () => { keyMenu = false; }, true);
+
   window.addEventListener('keydown', (e) => {
+    keyMenu = false;
     if (!underLem || e.isComposing || e.metaKey) return;
     if (['Control', 'Alt', 'Shift', 'Meta', 'CapsLock', 'Dead', 'Process'].includes(e.key)) return;
     if (editable(document.activeElement)) {
@@ -67,6 +73,7 @@ if (window !== window.top) {
     }
     e.preventDefault();
     e.stopImmediatePropagation();
+    keyMenu = true;
     browser.runtime.sendMessage({
       type: 'key',
       key: { key: e.key, code: e.code, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, metaKey: e.metaKey },

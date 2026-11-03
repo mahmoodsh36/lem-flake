@@ -8,6 +8,9 @@ window.addEventListener('message', (e) => {
   if (e.data && e.data.type === 'invoke-lem' && e.origin !== location.origin) e.stopImmediatePropagation();
 }, true);
 
+// macos opens a context menu on C-Return, and lem only blocks menus over its canvas
+window.addEventListener('contextmenu', (e) => e.preventDefault(), true);
+
 // lem asks the page for the clipboard on yank. read by the extension, so firefox shows no paste
 // prompt; framed pages keep the prompt.
 exportFunction(() => new window.wrappedJSObject.Promise(exportFunction((resolve, reject) => {

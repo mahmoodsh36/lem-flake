@@ -726,10 +726,16 @@
               };
               extraPrefs = ''
                 lockPref("xpinstall.signatures.required", false);
-                // cmd+t opens a tab over lem before the page sees it (macos menu shortcut), without it lem gets M-t
+                // reserved shortcuts (cmd+t/n/w) beat the page, so all go but edit keys (paste) and quit
                 Services.obs.addObserver((win) => {
-                  win.document.getElementById("key_newNavigatorTab")?.remove();
-                  win.document.getElementById("menu_newNavigatorTab")?.removeAttribute("key");
+                  const keep = new Set(["key_undo", "key_redo", "key_cut", "key_copy", "key_paste",
+                                        "key_selectAll", "key_quitApplication"]);
+                  for (const key of win.document.querySelectorAll("key")) {
+                    if (!keep.has(key.id)) key.remove();
+                  }
+                  for (const item of win.document.querySelectorAll("[key]")) {
+                    if (!keep.has(item.getAttribute("key"))) item.removeAttribute("key");
+                  }
                 }, "browser-delayed-startup-finished");
               '';
             } // { lemFrames = "${lem-frames}/${lem-frames.extid}.xpi"; };
