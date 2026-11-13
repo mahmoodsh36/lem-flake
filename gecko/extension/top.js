@@ -166,6 +166,14 @@ browser.runtime.onMessage.addListener((message) => {
     case 'open':
       invokeLem('lem-gecko-open', { url: message.url });
       return;
+    case 'scripts-wanted':
+      invokeLem('lem-gecko-scripts-wanted', {});
+      return;
+    case 'script': {
+      const id = idOfFrame(message.frameId);
+      if (id) invokeLem('lem-gecko-script', { id, name: message.name, data: message.data });
+      return;
+    }
   }
 });
 
@@ -173,6 +181,11 @@ browser.runtime.onMessage.addListener((message) => {
 window.addEventListener('message', (e) => {
   const d = e.data;
   if (e.origin !== location.origin || !d || typeof d.type !== 'string' || !d.type.startsWith('lem-web-')) return;
+  // json text, so no page objects are read through xrays
+  if (d.type === 'lem-web-scripts') {
+    try { browser.runtime.sendMessage({ type: 'scripts', scripts: JSON.parse(String(d.scripts)) }); } catch (_) {}
+    return;
+  }
   const entry = frames.get(d.id);
   if (!entry) return;
   const action = d.type.slice('lem-web-'.length);
@@ -194,6 +207,8 @@ window.addEventListener('message', (e) => {
       const input = lemInput();
       if (input) input.focus();
     }
+  } else if (action === 'script') {
+    toPage({ type: 'script', name: String(d.name), data: String(d.data) });
   } else if (action === 'scroll') {
     toPage({ type: 'scroll', how: String(d.how), count: Number(d.count) || 1 });
   }

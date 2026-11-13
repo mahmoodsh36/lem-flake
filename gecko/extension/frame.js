@@ -22,6 +22,7 @@ if (window !== window.top) {
     root = r && r.root;
     pass = Boolean(r && r.pass);
     if (!underLem) return;
+    loadScripts();
     watchTitle();
     if (focusedEarly && document.hasFocus()) giveBackFocus();
   }, () => {});
@@ -39,6 +40,9 @@ if (window !== window.top) {
   browser.runtime.onMessage.addListener((m) => {
     if (m.root !== root) return;
     if (m.type === 'pass') pass = m.on;
+    else if (m.type === 'script' && started.has(m.name)) {
+      window.postMessage({ lemScript: m.name, dir: 'down', data: m.data }, '*');
+    }
     // only the page's own document scrolls, not its subframes
     else if (m.type === 'scroll' && window.parent === window.top) scroll(m.how, m.count || 1);
   });
@@ -79,6 +83,22 @@ if (window !== window.top) {
       key: { key: e.key, code: e.code, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, metaKey: e.metaKey },
     });
   }, true);
+
+  // see wrap in background.js
+  const started = new Set();
+  const loadScripts = () => browser.runtime.sendMessage({ type: 'page-scripts' }).then((names) => {
+    for (const name of names || []) {
+      if (started.has(name)) continue;
+      started.add(name);
+      window.postMessage({ lemScript: name, dir: 'down', start: true }, '*');
+    }
+  }, () => {});
+
+  window.addEventListener('message', (e) => {
+    const d = e.data;
+    if (e.source !== window || !d || d.dir !== 'up' || !started.has(d.lemScript)) return;
+    browser.runtime.sendMessage({ type: 'script-send', name: String(d.lemScript), data: String(d.data) });
+  });
 
   let scroller = null;
   // app-like pages scroll an inner box rather than the document

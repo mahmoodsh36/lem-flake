@@ -23,6 +23,11 @@ const sameSiteNone = (cookies) => cookies.split('\n').map((cookie) => {
   return parts.join(';');
 }).join('\n');
 
+// firefox joins repeated csp headers with commas, one policy each
+const withoutFrameAncestors = (csp) => csp.split(',')
+  .map((policy) => policy.split(';').filter((d) => !/^\s*frame-ancestors\b/i.test(d)).join(';'))
+  .filter((policy) => policy.replace(/;/g, '').trim()).join(',');
+
 browser.webRequest.onHeadersReceived.addListener((details) => {
   if (!underLem(details)) return {};
   const https = details.url.startsWith('https:');
@@ -31,8 +36,8 @@ browser.webRequest.onHeadersReceived.addListener((details) => {
     const name = header.name.toLowerCase();
     if (name === 'x-frame-options') continue;
     if (name === 'content-security-policy') {
-      const value = header.value.split(';').filter((d) => !/^\s*frame-ancestors\b/i.test(d)).join(';');
-      if (value.trim()) headers.push({ name: header.name, value });
+      const value = withoutFrameAncestors(header.value);
+      if (value) headers.push({ name: header.name, value });
       continue;
     }
     if (name === 'set-cookie' && https) {
@@ -80,6 +85,99 @@ const rootOf = async (tabId, frameId) => {
 // "tabId:root" of pages that have the keyboard
 const passing = new Set();
 
+// page scripts: lem's code run as `function (lem)` in pages matching its url globs. null until lem
+// sends them.
+let scripts = null;
+let scriptsWanted = false;
+let scriptsQueue = Promise.resolve();
+
+const globRe = (glob) => new RegExp('^' + [...glob].map((c) =>
+  (c === '*' ? '.*' : c === '?' ? '.' : c.replace(/[.+^${}()|[\]\\]/, '\\$&'))).join('') + '$');
+
+// world MAIN is the only way past a strict csp. it runs in every matching frame, so it waits for
+// frame.js to start it under lem.
+const wrap = (name, code) => `(() => {
+  if (window === window.top) return;
+  const name = ${JSON.stringify(name)};
+  const handlers = [];
+  let started = false;
+  const lem = {
+    send: (value) => window.postMessage({ lemScript: name, dir: 'up', data: JSON.stringify(value) }, '*'),
+    on: (handler) => { handlers.push(handler); },
+  };
+  const run = () => { (function (lem) {
+${code}
+  }).call(window, lem); };
+  window.addEventListener('message', (e) => {
+    const d = e.data;
+    if (e.source !== window || !d || d.lemScript !== name || d.dir !== 'down') return;
+    if (d.start) { if (!started) { started = true; run(); } return; }
+    if (!started) return;
+    let value;
+    try { value = JSON.parse(d.data); } catch (_) { return; }
+    for (const h of handlers) try { h(value); } catch (err) { console.error(err); }
+  });
+})();`;
+
+const sameScript = (a, b) => a.code === b.code && a.allFrames === b.allFrames && a.matches.join('\n') === b.matches.join('\n');
+
+const register = (s) => browser.contentScripts.register({
+  matches: ['<all_urls>'], includeGlobs: s.matches, js: [{ code: wrap(s.name, s.code) }],
+  runAt: 'document_start', allFrames: true, world: 'MAIN',
+}).catch((e) => { console.error(`page script ${s.name}:`, e); return null; });
+
+const unregister = (s) => s.registered && s.registered.unregister().catch(() => {});
+
+const matches = (s, url, direct) => (s.allFrames || direct) && s.res.some((re) => re.test(url));
+
+const setScripts = async (tabId, list) => {
+  const old = new Map((scripts || []).map((s) => [s.name, s]));
+  const next = (Array.isArray(list) ? list : []).filter((s) => s && typeof s.name === 'string'
+    && typeof s.code === 'string' && Array.isArray(s.matches)).map((s) => {
+    const globs = s.matches.filter((m) => typeof m === 'string');
+    return { name: s.name, code: s.code, allFrames: Boolean(s.allFrames), matches: globs, res: globs.map(globRe) };
+  });
+  const changed = [];
+  scripts = await Promise.all(next.map(async (s) => {
+    const prev = old.get(s.name);
+    old.delete(s.name);
+    if (prev && sameScript(prev, s)) return prev;
+    if (prev) {
+      changed.push(prev);
+      await unregister(prev);
+    }
+    changed.push(s);
+    return { ...s, registered: await register(s) };
+  }));
+  for (const s of old.values()) {
+    changed.push(s);
+    await unregister(s);
+  }
+  // registration only reaches documents loaded after it
+  if (changed.length === 0) return;
+  for (const f of await browser.webNavigation.getAllFrames({ tabId })) {
+    if (f.frameId === 0) continue;
+    const direct = (await rootOf(tabId, f.frameId)) === f.frameId;
+    if (!changed.some((s) => matches(s, f.url, direct))) continue;
+    browser.tabs.executeScript(tabId, { frameId: f.frameId, code: 'location.reload()' }).catch(() => {});
+  }
+};
+
+const scriptsFor = async (sender) => {
+  if (!isPageFrame(sender)) return [];
+  if (scripts === null) {
+    if (!scriptsWanted) {
+      scriptsWanted = true;
+      toTop(sender.tab.id, { type: 'scripts-wanted' });
+      setTimeout(() => { scriptsWanted = false; }, 5000);  // in case lem missed it
+    }
+    return [];
+  }
+  const root = await rootOf(sender.tab.id, sender.frameId);
+  return scripts.filter((s) => s.registered && matches(s, sender.url, root === sender.frameId))
+    .map((s) => ({ name: s.name, root }));
+};
+
 browser.runtime.onMessage.addListener((message, sender) => {
   switch (message.type) {
     case 'hello': {
@@ -99,6 +197,17 @@ browser.runtime.onMessage.addListener((message, sender) => {
       if (m.type === 'pass') { if (m.on) passing.add(key); else passing.delete(key); }
       return browser.tabs.sendMessage(sender.tab.id, m).catch(() => {});
     }
+    case 'scripts':
+      if (sender.frameId !== 0 || !sender.tab || !isLem(sender.tab.url)) return;
+      scriptsQueue = scriptsQueue.then(() => setScripts(sender.tab.id, message.scripts)).catch((e) => console.error(e));
+      return;
+    case 'page-scripts':
+      return scriptsFor(sender).then((list) => list.map((s) => s.name));
+    case 'script-send':
+      return scriptsFor(sender).then((list) => {
+        const s = list.find((x) => x.name === message.name);
+        if (s) toTop(sender.tab.id, { type: 'script', frameId: s.root, name: s.name, data: message.data });
+      });
     case 'title':
       if (isPageFrame(sender)) toTop(sender.tab.id, { type: 'nav', frameId: sender.frameId, title: message.title });
       return;
