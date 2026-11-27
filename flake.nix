@@ -73,7 +73,7 @@
             (import ./extra/default.nix {
               inherit pkgs lisp inputs;
               # lazy, so patches must not read it
-              lem = { inherit lem-server lem-webview mkLemApp; };
+              lem = { inherit lem-server lem-webview mkLemApp; lem-repl = lem-repl-bin; };
             });
 
           lemSrc = if extra.patches == [ ] then inputs.lem else pkgs.applyPatches {
