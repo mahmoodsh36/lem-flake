@@ -108,11 +108,11 @@
     "lem": {
       "flake": false,
       "locked": {
-        "lastModified": 1793195951,
-        "narHash": "sha256-5A8pmFd+Jm+gBOfBhAICe0jogEp+gXXt6s2k/W+PC2Q=",
+        "lastModified": 1795812968,
+        "narHash": "sha256-zCZpPPk2S0RV3xcSHBpSy+eV9EdfpJM1NtxcA+LX3EU=",
         "owner": "mahmoodsh36",
         "repo": "lem",
-        "rev": "e124841f626d60e7252a2a7d1da6f8dec0c66315",
+        "rev": "3a2f71db183c9dad6c116c4281db38723cf731e8",
         "type": "github"
       },
       "original": {
