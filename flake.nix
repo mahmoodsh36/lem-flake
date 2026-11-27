@@ -1,0 +1,905 @@
+{
+  description = "lem flake";
+
+  inputs = {
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    nixpkgs.url = "github:nixos/nixpkgs/release-25.11";
+    cltpt = {
+      url = "github:mahmoodsh36/cltpt";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    lem = {
+      # url = "github:mahmoodsh36/lem/organ-mode";
+      url = "github:mahmoodsh36/lem";
+      flake = false;
+    };
+    micros = {
+      url = "github:lem-project/micros";
+      flake = false;
+    };
+    jsonrpc = {
+      url = "github:cxxxr/jsonrpc";
+      flake = false;
+    };
+    async-process = {
+      url = "github:lem-project/async-process";
+      flake = false;
+    };
+    lem-mailbox = {
+      url = "github:lem-project/lem-mailbox";
+      flake = false;
+    };
+    organ-mode = {
+      url = "github:mahmoodsh36/organ-mode";
+      flake = false;
+    };
+    tree-sitter-cl = {
+      url = "github:lem-project/tree-sitter-cl";
+      flake = false;
+    };
+    cl-webview = {
+      url = "github:lem-project/webview";
+      flake = false;
+    };
+    webview-upstream = {
+      url = "github:webview/webview";
+      flake = false;
+    };
+  };
+
+  outputs = inputs: inputs.flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = [
+        "aarch64-darwin"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "x86_64-linux"
+      ];
+
+      imports = [
+        inputs.flake-parts.flakeModules.easyOverlay
+      ];
+
+      perSystem =
+        { pkgs, ... }:
+        let
+          lisp = pkgs.sbcl;
+
+          # extra/ is a private gitignored repo, only visible when built as path:
+          extra = {
+            patches = [ ];
+            packages = { };
+            apps = { };
+          } // pkgs.lib.optionalAttrs (builtins.pathExists ./extra/default.nix)
+            (import ./extra/default.nix {
+              inherit pkgs lisp inputs;
+              # lazy, so patches must not read it
+              lem = { inherit lem-server lem-webview mkLemApp; };
+            });
+
+          lemSrc = if extra.patches == [ ] then inputs.lem else pkgs.applyPatches {
+            name = "lem-src";
+            src = inputs.lem;
+            inherit (extra) patches;
+          };
+          sharedLibExt = if pkgs.stdenv.isDarwin then "dylib" else "so";
+
+          # helper for ASDF systems
+          mkSimpleASDFSystem =
+            {
+              name,
+              src,
+              systems ? [ name ],
+              lispLibs ? [ ],
+            }:
+            lisp.buildASDFSystem {
+              pname = name;
+              version = "unstable";
+              inherit src systems lispLibs;
+            };
+
+          # lem runs init.lisp in a thread made by bordeaux-threads, which turns
+          # *read-eval* off, so any #. in code compiled from there fails to read.
+          # turn it back on while compiling.
+          lispMonkeyPatches = ''
+            (let ((original (symbol-function 'uiop/lisp-build:compile-file*)))
+              (setf (symbol-function 'uiop/lisp-build:compile-file*)
+                    (lambda (input-file &rest keys)
+                      (let ((*read-eval* t))
+                        (apply original input-file keys)))))
+          '';
+
+          # loaded first by lem.asd, so the patch is in the dumped image too
+          patchAsdfStep = ''
+            cat > configure-asdf.lisp <<EOF
+            (defpackage :nix-build-config (:use :cl))
+            (in-package :nix-build-config)
+
+            ${lispMonkeyPatches}
+            EOF
+            sed -i '1i(load "configure-asdf.lisp")' lem.asd
+          '';
+
+          asdfPathHelpers = ''
+            (defun nix-cl-user::normalize-existing-directory (path)
+              (when (and path
+                         (not (string= path ""))
+                         (probe-file path))
+                (namestring
+                 (uiop:ensure-directory-pathname (truename path)))))
+
+            (defun nix-cl-user::collect-paths-from-spec (spec)
+              (let ((paths))
+                (labels ((add-path (path)
+                           (let ((normalized (nix-cl-user::normalize-existing-directory path)))
+                             (when normalized
+                               (pushnew normalized paths :test #'string=)))))
+                  (when (and spec (not (string= spec "")))
+                    (cond
+                      ((uiop:directory-exists-p spec)
+                       (add-path spec))
+                      ((probe-file spec)
+                       (with-open-file (f spec :if-does-not-exist nil)
+                         (when f
+                           (loop for line = (read-line f nil nil)
+                                 while line
+                                 do (add-path line)))))
+                      (t
+                       (dolist (path (uiop:split-string spec :separator '(#\newline #\space)))
+                         (add-path path)))))
+                  (nreverse paths))))
+
+            (defun nix-cl-user::register-central-registry-paths (paths)
+              (dolist (path paths)
+                (pushnew (pathname path) asdf:*central-registry* :test #'equal)))
+
+            (defun nix-cl-user::register-central-registry-spec (spec)
+              (nix-cl-user::register-central-registry-paths
+               (nix-cl-user::collect-paths-from-spec spec)))
+
+            (defun nix-cl-user::register-source-registry-tree (path)
+              (let ((normalized (nix-cl-user::normalize-existing-directory path)))
+                (when normalized
+                  (asdf:initialize-source-registry
+                   `(:source-registry
+                     (:tree ,(pathname normalized))
+                     :inherit-configuration)))))
+          '';
+
+          # helper to generate the Lisp build script used by all variants
+          mkBuildScript =
+            {
+              entryPoint ? "lem:main",
+              faslTranslationPaths ? [ (toString inputs.organ-mode) ],
+            }:
+            let
+              faslTranslationForms = pkgs.lib.concatMapStringsSep "\n" (path: ''
+                (#p"${path}/**/*.*"
+                 ,(merge-pathnames "fasl-cache${path}/**/*.*" (uiop:getcwd)))'')
+                faslTranslationPaths;
+            in
+            pkgs.writeText "build-lem.lisp" ''
+              (defpackage :nix-cl-user (:use :cl))
+              (in-package :nix-cl-user)
+
+              ;; load ASDF
+              (load "${asdfFaslPath}")
+
+              ${asdfPathHelpers}
+
+              ${pkgs.lib.optionalString (faslTranslationPaths != []) ''
+                ;; redirect selected read-only source trees to a local fasl-cache directory
+                (asdf:initialize-output-translations
+                  `(:output-translations
+                    ${faslTranslationForms}
+                    :inherit-configuration))
+              ''}
+
+              ;; add extension paths (like organ-mode) to the registry
+              (nix-cl-user::register-central-registry-spec (uiop:getenv "LEM_EXTENSION_PATHS"))
+
+              ;; load systems
+              (mapcar #'asdf:load-system (uiop:split-string (uiop:getenv "systems")))
+
+              ;; runtime hook: configure ASDF for runtime
+              ;; - redirect FASL output to user cache
+              ;; - register all loaded systems as immutable so ASDF won't recompile them
+              ;;   (recompilation reloads buffer.lisp which redefines make-buffer-point
+              ;;    back to the default that returns plain POINT instead of CURSOR,
+              ;;    causing cursor-mark to fail on buffers created during recompilation)
+              (defun nix-cl-user::configure-asdf-for-runtime ()
+                (nix-cl-user::register-central-registry-spec
+                 (uiop:getenv "LEM_EXTENSION_PATHS"))
+                (asdf:initialize-output-translations
+                  `(:output-translations
+                    (t (,(merge-pathnames ".cache/lem-fasl/" (user-homedir-pathname)) :**/ :*.*.*))
+                    :inherit-configuration))
+                ;; mark all currently loaded systems as immutable so ASDF
+                ;; won't try to recompile them when init.lisp loads extensions
+                (dolist (system (asdf:already-loaded-systems))
+                  (asdf:register-immutable-system system)))
+              (pushnew 'nix-cl-user::configure-asdf-for-runtime uiop:*image-restore-hook*)
+
+              ;; dump image
+              ;; not uiop:dump-image: it forces :save-runtime-options t, so the
+              ;; image ignores --dynamic-space-size and opens it as a file instead
+              (setf uiop:*image-entry-point* #'${entryPoint})
+              (setf uiop:*image-dumped-p* :executable)
+              (uiop:call-image-dump-hook)
+              (setf sb-ext::*gc-run-time* 0)
+              (sb-ext:save-lisp-and-die "lem"
+                                        :executable t
+                                        :compression t
+                                        :save-runtime-options nil
+                                        :toplevel #'uiop:restore-image)
+            '';
+
+          micros = mkSimpleASDFSystem {
+            name = "micros";
+            src = inputs.micros;
+          };
+
+          lem-mailbox = mkSimpleASDFSystem {
+            name = "lem-mailbox";
+            src = inputs.lem-mailbox;
+            lispLibs = with lisp.pkgs; [
+              bordeaux-threads
+              bt-semaphore
+              queues
+              queues_dot_simple-cqueue
+            ];
+          };
+
+          jsonrpc = lisp.buildASDFSystem {
+            pname = "jsonrpc";
+            version = "unstable";
+            src = inputs.jsonrpc;
+            systems = [
+              "jsonrpc"
+              "jsonrpc/transport/stdio"
+              "jsonrpc/transport/tcp"
+              "jsonrpc/transport/websocket"
+              "jsonrpc/transport/local-domain-socket"
+            ];
+            lispLibs = with lisp.pkgs; [
+              yason
+              alexandria
+              bordeaux-threads
+              dissect
+              chanl
+              vom
+              usocket
+              trivial-timeout
+              cl_plus_ssl
+              quri
+              fast-io
+              trivial-utf-8
+              websocket-driver
+              clack
+              clack-handler-hunchentoot
+              event-emitter
+              hunchentoot
+            ];
+          };
+
+          async-process-native = pkgs.stdenv.mkDerivation {
+            pname = "async-process-native";
+            version = "unstable";
+            src = inputs.async-process;
+            nativeBuildInputs = with pkgs; [
+              libtool
+              libffi.dev
+              automake
+              autoconf
+              pkg-config
+            ];
+            buildPhase = "make PREFIX=$out";
+          };
+
+          async-process = lisp.buildASDFSystem {
+            pname = "async-process";
+            version = "unstable";
+            src = inputs.async-process;
+            systems = [ "async-process" ];
+            lispLibs = [ lisp.pkgs.cffi ];
+            nativeLibs = [ async-process-native ];
+            nativeBuildInputs = [ pkgs.pkg-config ];
+          };
+
+          treeSitterGrammars = with pkgs.tree-sitter-grammars; [
+            tree-sitter-json
+            tree-sitter-markdown
+            tree-sitter-yaml
+            tree-sitter-nix
+            tree-sitter-python
+            tree-sitter-javascript
+            tree-sitter-typescript
+            tree-sitter-go
+            tree-sitter-perl
+            tree-sitter-clojure
+            tree-sitter-latex
+          ];
+
+          ts-wrapper = pkgs.stdenv.mkDerivation {
+            pname = "ts-wrapper";
+            version = "0.1.0";
+            src = "${inputs.tree-sitter-cl}/c-wrapper";
+            buildInputs = [ pkgs.tree-sitter ];
+            buildPhase = ''
+              $CC -shared -fPIC -o libts-wrapper.${sharedLibExt} ts-wrapper.c \
+                -I${pkgs.tree-sitter}/include \
+                -L${pkgs.tree-sitter}/lib \
+                -ltree-sitter
+            '';
+            installPhase = ''
+              mkdir -p $out/lib
+              cp libts-wrapper.${sharedLibExt} $out/lib/
+            '';
+          };
+
+          # lem-terminal/ffi.lisp loads it by the literal name "terminal.so", even on darwin
+          terminal-so = pkgs.stdenv.mkDerivation {
+            pname = "lem-terminal-so";
+            version = "unstable";
+            src = "${lemSrc}/extensions/terminal";
+            buildInputs = [ pkgs.libvterm-neovim ];
+            buildPhase = ''
+              $CC -shared -fPIC -o terminal.so terminal.c \
+                -I${pkgs.libvterm-neovim}/include \
+                -L${pkgs.libvterm-neovim}/lib -lvterm -lutil
+            '';
+            installPhase = ''
+              mkdir -p $out/lib
+              cp terminal.so $out/lib/
+            '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+              # the lisp setup hook only puts dirs holding a .dylib on DYLD_LIBRARY_PATH
+              ln -s terminal.so $out/lib/terminal.dylib
+            '';
+          };
+
+          treeSitterNativeLibs = [ pkgs.tree-sitter ts-wrapper ];
+          treeSitterLibPath = pkgs.lib.concatMapStringsSep ":" toString treeSitterGrammars;
+
+          tree-sitter-cl = lisp.buildASDFSystem {
+            pname = "tree-sitter-cl";
+            version = "unstable";
+            src = pkgs.applyPatches {
+              name = "tree-sitter-cl-src";
+              src = inputs.tree-sitter-cl;
+              # static/ holds a homebrew-built wrapper (links libtree-sitter 0.26) that cffi
+              # finds before ours, and cffi counts darwin as :unix, so .so names shadow .dylib
+              postPatch = ''
+                rm -rf static
+                substituteInPlace src/ffi.lisp \
+                  --replace-fail '(:unix (:or "libtree-sitter.so.0"' \
+                                 '(:darwin (:or "libtree-sitter.0.dylib" "libtree-sitter.dylib")) (:unix (:or "libtree-sitter.so.0"' \
+                  --replace-fail '(:unix "libts-wrapper.so")' \
+                                 '(:darwin "libts-wrapper.dylib") (:unix "libts-wrapper.so")'
+              '';
+            };
+            systems = [ "tree-sitter-cl" ];
+            lispLibs = with lisp.pkgs; [
+              cffi
+              alexandria
+              trivial-garbage
+            ];
+            nativeLibs = treeSitterNativeLibs;
+          };
+
+          c-webview = pkgs.stdenv.mkDerivation {
+            pname = "c-webview";
+            version = "unstable";
+            src = inputs.cl-webview;
+            nativeBuildInputs = with pkgs; [ cmake ninja pkg-config ];
+            dontStrip = true;
+            buildInputs =
+              if pkgs.stdenv.isLinux
+              then [ pkgs.webkitgtk_4_1 pkgs.webkitgtk_6_0 pkgs.gtk3 ]
+              else [ pkgs.apple-sdk_14 ];
+
+            configurePhase =
+              let
+                linkerFlags =
+                  if pkgs.stdenv.isDarwin
+                  then "-Wl,-all_load"
+                  else "-Wl,--whole-archive -Wl,--allow-multiple-definition";
+              in
+                ''
+                  runHook preConfigure
+                  cmake -G Ninja -B build -S c \
+                    -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_CXX_FLAGS="-fvisibility=default -DWEBVIEW_API='extern __attribute__((visibility(\"default\")))'" \
+                    -DCMAKE_C_FLAGS="-fvisibility=default -DWEBVIEW_API='extern __attribute__((visibility(\"default\")))'" \
+                    -DCMAKE_SHARED_LINKER_FLAGS="${linkerFlags}" \
+                    -DFETCHCONTENT_SOURCE_DIR_WEBVIEW=${inputs.webview-upstream}
+                  runHook postConfigure
+                '';
+            buildPhase = "cmake --build build";
+            installPhase = ''
+              mkdir -p $out/lib
+              cp build/lib/libexample.${sharedLibExt} $out/lib/libwebview.${sharedLibExt}
+            '';
+          };
+
+          cl-webview = lisp.buildASDFSystem {
+            pname = "cl-webview";
+            version = "unstable";
+            src = inputs.cl-webview // { name = "cl-webview"; };
+            systems = [ "webview" ];
+            lispLibs = with lisp.pkgs; [ cffi float-features ];
+            nativeLibs = [ c-webview ];
+            postPatch = ''
+              sed -i 's/(define-foreign-library (libwebview/(define-foreign-library libwebview/' webview.lisp
+              sed -i '/:search-path/,/arm64"))))/d' webview.lisp
+              sed -i 's/"libwebview\.so\.0\.12\.0"/"libwebview.${sharedLibExt}"/' webview.lisp
+            '';
+          };
+
+          commonLispLibs =
+            [
+              micros
+              async-process
+              jsonrpc
+              lem-mailbox
+              inputs.cltpt.packages.${pkgs.stdenv.system}.cltpt-lib
+              tree-sitter-cl
+            ]
+            ++ (with lisp.pkgs; [
+              deploy
+              iterate
+              closer-mop
+              trivia
+              alexandria
+              trivial-gray-streams
+              trivial-types
+              cl-ppcre
+              inquisitor
+              babel
+              bordeaux-threads
+              yason
+              log4cl
+              split-sequence
+              str
+              dexador
+              cl-mustache
+              esrap
+              parse-number
+              cl-package-locks
+              trivial-utf-8
+              swank
+              _3bmd
+              _3bmd-ext-code-blocks
+              lisp-preprocessor
+              trivial-ws
+              trivial-open-browser
+              frugal-uuid
+              hunchentoot
+              rove
+              cl-template
+              cl-interpol
+              named-readtables
+              cl-ansi-text
+              trivial-package-local-nicknames
+            ]);
+
+          ncursesLispLibs = with lisp.pkgs; [ cl-charms cl-setlocale ];
+
+          extensionPaths = pkgs.writeText "extension-paths" (toString inputs.organ-mode);
+
+          lem-base = lisp.buildASDFSystem {
+            pname = "lem-base";
+            version = "unstable";
+            src = lemSrc // { name = "lem"; };
+            nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
+            lispLibs = commonLispLibs;
+            postPatch = ''
+              sed -i '1i(pushnew :nix-build *features*)' lem.asd
+              ${patchAsdfStep}
+            '';
+            LEM_EXTENSION_PATHS = toString inputs.organ-mode;
+            buildScript = mkBuildScript { };
+          };
+
+          frontendInstallPhase = ''
+            runHook preInstall
+            mkdir -p $out/bin
+            install lem $out/bin
+            wrapProgram $out/bin/lem \
+              --add-flags "--dynamic-space-size 4096 --end-runtime-options" \
+              --prefix LD_LIBRARY_PATH : "$LD_LIBRARY_PATH:${treeSitterLibPath}" \
+              --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
+            runHook postInstall
+          '';
+
+          mkWebviewInstallPhase =
+            binaryName:
+            ''
+              runHook preInstall
+              mkdir -p $out/bin
+              install lem $out/bin/${binaryName}
+              wrapProgram $out/bin/${binaryName} \
+                --add-flags "--dynamic-space-size 4096 --end-runtime-options" \
+                --set LEM_EXTENSION_PATHS "${inputs.organ-mode}" \
+                --prefix LD_LIBRARY_PATH : "$LD_LIBRARY_PATH:${treeSitterLibPath}" \
+                --prefix DYLD_LIBRARY_PATH : "$DYLD_LIBRARY_PATH"
+            ''
+            + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+              # the .app is started by launchd with a bare PATH, so re-exec once
+              # through a login shell to pick up the user's env
+              mv $out/bin/${binaryName} $out/bin/.${binaryName}-env-wrapped
+              cat > $out/bin/${binaryName} <<EOF
+              #!/bin/sh
+              # launchd throws stderr away, and sbcl's fatal messages (heap
+              # exhaustion, ldb) only ever go there: keep them in a file
+              if [ -z "\$LEM_STDERR_LOGGED" ] && ! [ -t 2 ]; then
+                export LEM_STDERR_LOGGED=1
+                mkdir -p "\$HOME/.lem"
+                printf '==== %s ${binaryName} start (pid %s) ====\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$\$" >> "\$HOME/.lem/stderr.log"
+                exec 2>>"\$HOME/.lem/stderr.log"
+              fi
+              login_shell="\''${SHELL:-/bin/zsh}"
+              if [ -z "\$LEM_LOGIN_ENV" ] && [ -x "\$login_shell" ]; then
+                export LEM_LOGIN_ENV=1
+                exec "\$login_shell" -lc 'exec "\$0" "\$@"' $out/bin/.${binaryName}-env-wrapped "\$@"
+              fi
+              exec $out/bin/.${binaryName}-env-wrapped "\$@"
+              EOF
+              chmod +x $out/bin/${binaryName}
+            ''
+            + pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+              wrapProgram $out/bin/${binaryName} \
+                --set FONTCONFIG_FILE "${pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; }}" \
+                --prefix XDG_DATA_DIRS : "${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}" \
+                --prefix XDG_DATA_DIRS : "${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}"
+            ''
+            + ''
+              runHook postInstall
+            '';
+
+          lem-ncurses = lem-base.overrideLispAttrs (o: {
+            pname = "lem-ncurses";
+            meta.mainProgram = "lem";
+            systems = [ "lem-ncurses" "tree-sitter-cl" "lem-tree-sitter" ];
+            lispLibs = o.lispLibs ++ ncursesLispLibs;
+            nativeLibs = [ pkgs.ncurses terminal-so ] ++ treeSitterNativeLibs;
+            installPhase = frontendInstallPhase;
+          });
+
+          lem-sdl2 = lem-base.overrideLispAttrs (o: {
+            pname = "lem-sdl2";
+            meta.mainProgram = "lem";
+            systems = [ "lem-sdl2" "tree-sitter-cl" "lem-tree-sitter" ];
+            lispLibs = o.lispLibs ++ (with lisp.pkgs; [
+              sdl2
+              sdl2-ttf
+              sdl2-image
+              trivial-main-thread
+            ]);
+            nativeLibs = (with pkgs; [ SDL2 SDL2_ttf SDL2_image ]) ++ [ terminal-so ] ++ treeSitterNativeLibs;
+            installPhase = frontendInstallPhase;
+          });
+
+          lem-webview-lib = lisp.buildASDFSystem {
+            pname = "lem-webview-lib";
+            version = "unstable";
+            src = lemSrc // { name = "lem-patched"; };
+
+            # lem-webview and lem-tree-sitter are the key systems
+            systems = [ "lem-webview" "lem-tree-sitter" ];
+
+            # dependencies required by these systems
+            lispLibs = commonLispLibs ++ [ cl-webview ] ++ (with lisp.pkgs; [
+              float-features
+              command-line-arguments
+              iterate
+              trivial-types
+            ]);
+
+            nativeLibs = [ c-webview terminal-so ]
+              ++ treeSitterNativeLibs
+              ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+                 pkgs.webkitgtk_4_1
+                 pkgs.webkitgtk_6_0
+                 pkgs.gtk3
+                 pkgs.stdenv.cc.cc.lib  # provides libstdc++.so.6
+               ];
+
+            # skip fixupPhase on darwin (patchelf not needed/available)
+            fixupPhase = pkgs.lib.optionalString pkgs.stdenv.isDarwin "";
+            dontFixup = pkgs.stdenv.isDarwin;
+
+            # patch steps for the prebuilt webview build
+            postPatch = ''
+              # add :nix-build features
+              sed -i '1i(pushnew :nix-build *features*)' lem.asd
+
+              # add organ-mode path manually to ASDF registry so it can be found during build
+              sed -i '1i(pushnew (pathname "${inputs.organ-mode}/") asdf:*central-registry* :test #'\'''equal)' lem.asd
+
+              ${patchAsdfStep}
+            '' + (
+                if pkgs.stdenv.isLinux
+                then ''sed -i 's/fontName:"Monospace"/fontName:"DejaVu Sans Mono"/' frontends/server/frontend/dist/assets/index.js''
+                else ''sed -i 's/fontName:"Monospace"/fontName:"Menlo"/' frontends/server/frontend/dist/assets/index.js''
+              );
+            LEM_EXTENSION_PATHS = toString inputs.organ-mode;
+          };
+
+          # a dumped executable on the webview lib, reusing its store fasls
+          mkServerFrontend =
+            name:
+            lem-webview-lib.overrideLispAttrs (o: {
+              pname = name;
+              meta.mainProgram = name;
+              buildScript = mkBuildScript { entryPoint = "${name}:main"; };
+              nativeBuildInputs = (o.nativeBuildInputs or [ ]) ++ [ pkgs.makeBinaryWrapper ];
+              installPhase = mkWebviewInstallPhase name;
+            });
+
+          lem-webview = mkServerFrontend "lem-webview";
+
+          # a .app on darwin, a .desktop entry elsewhere, for one lem binary
+          mkLemApp =
+            { pname, package, binary, name, desktopName }:
+            let
+              desktopItem = pkgs.makeDesktopItem {
+                inherit name desktopName;
+                exec = binary;
+                icon = "lem";
+                genericName = "Text Editor";
+                categories = [ "Development" "TextEditor" ];
+              };
+            in
+            pkgs.stdenv.mkDerivation {
+              inherit pname;
+              version = "unstable";
+              # nixpkgs write-darwin-bundle has no shebang, so bash runs it in a forked
+              # subshell which segfaults, shadow it with a proper script.
+              nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
+                (pkgs.writeShellScriptBin "write-darwin-bundle" ''
+                  exec ${pkgs.bash}/bin/bash ${pkgs.writeDarwinBundle}/bin/write-darwin-bundle "$@"
+                '')
+                pkgs.desktopToDarwinBundle
+              ];
+              buildInputs = [ package ];
+              dontUnpack = true;
+              installPhase = ''
+                runHook preInstall
+                mkdir -p $out/bin
+                ln -s ${package}/bin/${binary} $out/bin/${binary}
+                mkdir -p $out/share/applications
+                cp -r ${desktopItem}/share/applications/* $out/share/applications/
+                runHook postInstall
+              '';
+              meta.mainProgram = binary;
+            };
+
+          lem-webview-app = mkLemApp {
+            pname = "lem-webview-app";
+            package = lem-webview;
+            binary = "lem-webview";
+            name = "lem";
+            desktopName = "Lem";
+          };
+
+          # the server frontend alone, for a browser to show
+          lem-server = mkServerFrontend "lem-server";
+
+          allLispLibs = commonLispLibs ++ ncursesLispLibs ++ [ cl-webview lem-ncurses ] ++ (with lisp.pkgs; [
+            float-features
+            command-line-arguments
+          ]);
+
+          mkPathCollector =
+            { name, findPattern }:
+            pkgs.runCommand name { packages = allLispLibs; } ''
+              collect_deps() {
+                local pkg="$1"
+                local seen_file="$2"
+                if grep -qxF "$pkg" "$seen_file" 2>/dev/null; then return; fi
+                echo "$pkg" >> "$seen_file"
+                find "$pkg" ${findPattern} 2>/dev/null | while read f; do
+                  dirname "$f" >> "$out"
+                done
+                if [ -f "$pkg/nix-support/propagated-build-inputs" ]; then
+                  for dep in $(cat "$pkg/nix-support/propagated-build-inputs"); do
+                    if [ -n "$dep" ] && [ -d "$dep" ]; then
+                      collect_deps "$dep" "$seen_file"
+                    fi
+                  done
+                fi
+              }
+              touch "$out"
+              seen=$(mktemp)
+              for pkg in $packages; do collect_deps "$pkg" "$seen"; done
+              rm "$seen"
+              sort -u "$out" -o "$out"
+            '';
+
+          lispLibPaths = mkPathCollector {
+            name = "lisp-lib-paths";
+            findPattern = "-name '*.asd' -type f";
+          };
+
+          nativeLibPaths = mkPathCollector {
+            name = "native-lib-paths";
+            findPattern = ''-type f \( -name "*.so" -o -name "*.dylib" \)'';
+          };
+
+          lemReplNativeLibs =
+            [ pkgs.ncurses pkgs.openssl c-webview async-process-native terminal-so ]
+            ++ treeSitterNativeLibs
+            ++ treeSitterGrammars
+            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.webkitgtk_4_1 pkgs.gtk3 pkgs.stdenv.cc.cc.lib ];
+
+          asdfFaslPath = "${lem-base.asdfFasl}/asdf.${lem-base.faslExt}";
+
+          lispInitCode = ''
+            (defpackage :nix-cl-user (:use :cl))
+            (in-package :nix-cl-user)
+
+            (load "${asdfFaslPath}")
+            (pushnew :nix-build *features*)
+
+            ${asdfPathHelpers}
+
+            (defun nix-cl-user::collect-runtime-source-paths ()
+              (remove-duplicates
+               (append
+                (nix-cl-user::collect-paths-from-spec (uiop:getenv "LEM_SOURCE_DIR"))
+                (nix-cl-user::collect-paths-from-spec (uiop:getenv "LEM_EXTENSION_PATHS")))
+               :test #'string=))
+
+            (defun nix-cl-user::configure-runtime-output-translations ()
+              (let ((source-paths (nix-cl-user::collect-runtime-source-paths)))
+                (asdf:initialize-output-translations
+                 `(:output-translations
+                   ,@(mapcar
+                      (lambda (path)
+                        (list
+                         (pathname (concatenate 'string path "**/*.*"))
+                         (merge-pathnames
+                          (concatenate 'string ".cache/lem-fasl" path "**/*.*")
+                          (user-homedir-pathname))))
+                      source-paths)
+                   (#p"/nix/store/**/*.*" #p"/nix/store/**/*.*")
+                   :ignore-inherited-configuration))))
+
+            (defun nix-cl-user::configure-runtime-central-registries ()
+              (nix-cl-user::register-central-registry-spec (uiop:getenv "LEM_EXTENSION_PATHS"))
+              (nix-cl-user::register-central-registry-spec (uiop:getenv "LEM_LIB_PATHS")))
+
+            (defun nix-cl-user::configure-runtime-source-registries ()
+              (nix-cl-user::register-source-registry-tree (uiop:getenv "LEM_SOURCE_DIR")))
+
+            (nix-cl-user::configure-runtime-output-translations)
+
+            ;; let #. read in code compiled from bt2 threads
+            ${lispMonkeyPatches}
+
+            (nix-cl-user::configure-runtime-central-registries)
+            (nix-cl-user::configure-runtime-source-registries)
+          '';
+
+          lemReplEnvSetup = ''
+            export LEM_LIB_PATHS="${lispLibPaths}"
+            export LEM_SOURCE_DIR="''${LEM_SOURCE_DIR:-${lemSrc}/}"
+            export LEM_EXTENSION_PATHS="${extensionPaths}"
+            NATIVE_PATHS=$(cat "${nativeLibPaths}" | tr '\n' ':')
+            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath lemReplNativeLibs}:$NATIVE_PATHS"
+            export DYLD_LIBRARY_PATH="$LD_LIBRARY_PATH"
+          '';
+
+          lemInitFile = pkgs.writeText "lem-init.lisp" lispInitCode;
+
+          lem-repl-bin = pkgs.writeShellScriptBin "lem-repl" ''
+            ${lemReplEnvSetup}
+            exec ${pkgs.sbcl}/bin/sbcl --load "${lemInitFile}" "$@"
+          '';
+
+          organ-mode-tests-runner = pkgs.writeShellScriptBin "organ-mode-tests" ''
+            exec ${lem-repl-bin}/bin/lem-repl --load "${inputs.organ-mode}/run-tests.lisp" "$@"
+          '';
+
+          lemTestsScript = pkgs.writeText "run-lem-tests.lisp" ''
+            (asdf:load-system "cffi")
+            (let ((lib (uiop:getenv "LIBTREE_SITTER_PATH")))
+              (when (and lib (probe-file lib))
+                (cffi:load-foreign-library lib)))
+            (asdf:load-system "rove")
+            (let ((systems (or (cdr sb-ext:*posix-argv*)
+                               '("lem-tests" "lem-vi-mode/tests" "lem-transient/tests"))))
+              (dolist (sys systems)
+                (format t "~%loading test system: ~A~%" sys)
+                (asdf:load-system sys))
+              (format t "~%running ~D test suites~%" (length (rove:all-suites)))
+              (let ((failed 0)
+                    (total (length (rove:all-suites))))
+                (dolist (suite (rove:all-suites))
+                  (handler-case
+                    (let ((result (rove:run-suite suite)))
+                      (when (and (listp result) (getf result :failed))
+                        (incf failed)))
+                    (error (e)
+                      (format t "~%suite error: ~A~%" e)
+                      (incf failed))))
+                (format t "~%summary: ~D passed, ~D failed~%" (- total failed) failed)
+                (sb-ext:exit :code (if (> failed 0) 1 0))))
+          '';
+
+          frontends = { inherit lem-ncurses lem-sdl2 lem-webview lem-webview-lib lem-webview-app; };
+
+          devNativeLibs =
+            (with pkgs; [ ncurses SDL2 SDL2_ttf SDL2_image openssl ])
+            ++ treeSitterNativeLibs
+            ++ treeSitterGrammars
+            ++ pkgs.lib.optionals pkgs.stdenv.isLinux (with pkgs; [ webkitgtk_4_1 gtk3 ]);
+
+          lem-tests-runner = pkgs.writeShellScriptBin "lem-tests" ''
+            export LIBTREE_SITTER_PATH="${pkgs.tree-sitter}/lib/libtree-sitter.${sharedLibExt}"
+            export DYLD_FALLBACK_LIBRARY_PATH="${pkgs.tree-sitter}/lib:${pkgs.lib.makeLibraryPath lemReplNativeLibs}:''${DYLD_FALLBACK_LIBRARY_PATH:-}"
+            exec ${lem-repl-bin}/bin/lem-repl --load "${lemTestsScript}" "$@"
+          '';
+        in {
+          overlayAttrs = frontends // extra.packages;
+
+          packages = frontends // {
+            inherit cl-webview lem-server;
+            lem-repl = lem-repl-bin;
+            organ-mode-tests = organ-mode-tests-runner;
+            lem-tests = lem-tests-runner;
+            default = lem-ncurses;
+          } // extra.packages;
+
+          apps = pkgs.lib.mapAttrs (_: program: { type = "app"; inherit program; }) {
+            inherit lem-ncurses lem-sdl2 lem-webview lem-webview-app;
+            organ-mode-tests = organ-mode-tests-runner;
+            lem-tests = lem-tests-runner;
+            default = lem-ncurses;
+          } // extra.apps;
+
+          devShells.lem-repl = pkgs.mkShell {
+            packages = [ pkgs.sbcl ] ++ lemReplNativeLibs;
+            shellHook = ''
+              export LEM_SOURCE_DIR="$PWD/"
+              ${lemReplEnvSetup}
+              export LEM_INIT="${lemInitFile}"
+              lem-sbcl() { sbcl --load "$LEM_INIT" "$@"; }
+              export -f lem-sbcl
+              echo "  lem-sbcl                            # SBCL with lem libs"
+              echo "  (asdf:load-system \"lem-ncurses\")  # load a frontend"
+              echo "  (lem:lem)                           # start lem"
+            '';
+          };
+
+          devShells.default = pkgs.mkShell {
+            packages =
+              (with pkgs; [
+                sbcl
+                sbclPackages.qlot-cli
+                gnumake
+                pkg-config
+                nodejs_22
+                perl538Packages.PLS
+                clojure
+                clojure-lsp
+                leiningen
+                babashka
+                nixfmt-rfc-style
+                direnv
+              ])
+              ++ devNativeLibs;
+
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath devNativeLibs;
+
+            shellHook = ''
+              if [ -f "$HOME/lem-project/tree-sitter-cl/c-wrapper/libts-wrapper.so" ]; then
+                export LD_LIBRARY_PATH="$HOME/lem-project/tree-sitter-cl/c-wrapper:$LD_LIBRARY_PATH"
+              fi
+              echo "  SBCL: $(sbcl --version)"
+              echo "  qlot install"
+              echo "  make ncurses"
+            '';
+          };
+        };
+    };
+}
